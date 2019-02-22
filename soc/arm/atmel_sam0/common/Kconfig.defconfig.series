@@ -1,0 +1,35 @@
+# Kconfig.defconfig.series - Atmel SAM0 all MCU lines
+#
+# Copyright (c) 2019 Benjamin Valentin
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+if SOC_FAMILY_SAM0
+
+if SERIAL
+config UART_SAM0
+	default y
+endif
+
+if GPIO
+config GPIO_SAM0
+	default y
+endif
+
+if WATCHDOG
+config WDT_SAM0
+	default y
+endif
+
+if SPI
+config SPI_SAM0
+	default y
+endif
+
+if PINMUX
+config PINMUX_SAM0
+	default y
+endif
+
+endif # SOC_FAMILY_SAM0
