@@ -1,0 +1,12 @@
+# Kconfig - SAM0 RTC configuration options
+#
+# Copyright (c) 2019 ML!PA Consulting GmbH
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+config RTC_SAM0
+	bool "Atmel SAM0 RTC Driver"
+	depends on SOC_FAMILY_SAM0
+	help
+	  Build RTC driver for SAM0 SoCs.
