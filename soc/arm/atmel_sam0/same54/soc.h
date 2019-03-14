@@ -27,6 +27,8 @@
 
 #endif /* _ASMLANGUAGE */
 
+#include "sercom_fixup.h"
+
 /** Processor Clock (HCLK) Frequency */
 #define SOC_ATMEL_SAM0_HCLK_FREQ_HZ CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC
 /** Master Clock (MCK) Frequency */
