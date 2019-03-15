@@ -18,8 +18,14 @@ LOG_MODULE_REGISTER(spi_sam0);
 struct spi_sam0_config {
 	SercomSpi *regs;
 	u32_t pads;
+#ifdef MCLK
+	volatile u32_t *mclk;
+	u32_t mclk_mask;
+	u16_t gclk_core_id;
+#else
 	u32_t pm_apbcmask;
 	u16_t gclk_clkctrl_id;
+#endif
 };
 
 /* Device run time data */
@@ -61,7 +67,11 @@ static int spi_sam0_configure(struct device *dev,
 		return -ENOTSUP;
 	}
 
+#ifdef SERCOM_SPI_CTRLA_MODE_SPI_MASTER_Val
 	ctrla.bit.MODE = SERCOM_SPI_CTRLA_MODE_SPI_MASTER_Val;
+#else
+	ctrla.bit.MODE = 0x3;
+#endif
 
 	if ((config->operation & SPI_TRANSFER_LSB) != 0) {
 		ctrla.bit.DORD = 1;
@@ -444,12 +454,21 @@ static int spi_sam0_init(struct device *dev)
 	struct spi_sam0_data *data = dev->driver_data;
 	SercomSpi *regs = cfg->regs;
 
+#ifdef MCLK
+	/* Enable the GCLK */
+	GCLK->PCHCTRL[cfg->gclk_core_id].reg = GCLK_PCHCTRL_GEN_GCLK0 |
+					     = GCLK_PCHCTRL_CHEN;
+
+	/* Enable the MCLK */
+	*cfg->mclk |= cfg->mclk_mask;
+#else
 	/* Enable the GCLK */
 	GCLK->CLKCTRL.reg = cfg->gclk_clkctrl_id | GCLK_CLKCTRL_GEN_GCLK0 |
 			    GCLK_CLKCTRL_CLKEN;
 
 	/* Enable SERCOM clock in PM */
 	PM->APBCMASK.reg |= cfg->pm_apbcmask;
+#endif
 
 	/* Disable all SPI interrupts */
 	regs->INTENCLR.reg = SERCOM_SPI_INTENCLR_MASK;
@@ -476,6 +495,16 @@ static const struct spi_driver_api spi_sam0_driver_api = {
 	SERCOM_SPI_CTRLA_DIPO(DT_SPI_SAM0_SERCOM##n##_DIPO) | \
 	SERCOM_SPI_CTRLA_DOPO(DT_SPI_SAM0_SERCOM##n##_DOPO)
 
+#ifdef MCLK
+#define SPI_SAM0_DEFINE_CONFIG(n)						\
+	static const struct spi_sam0_config spi_sam0_config_##n = {		\
+		.regs = (SercomSpi *)DT_SPI_SAM0_SERCOM##n##_BASE_ADDRESS,	\
+		.mclk = MCLK_SERCOM##n,						\
+		.mclk_mask = MCLK_SERCOM##n##_MASK,				\
+		.gclk_core_id = SERCOM##n##_GCLK_ID_CORE,			\
+		.pads = SPI_SAM0_SERCOM_PADS(n)					\
+	}
+#else
 #define SPI_SAM0_DEFINE_CONFIG(n)                                            \
 	static const struct spi_sam0_config spi_sam0_config_##n = {          \
 		.regs = (SercomSpi *)DT_SPI_SAM0_SERCOM##n##_BASE_ADDRESS, \
@@ -483,6 +512,7 @@ static const struct spi_driver_api spi_sam0_driver_api = {
 		.gclk_clkctrl_id = GCLK_CLKCTRL_ID_SERCOM##n##_CORE,         \
 		.pads = SPI_SAM0_SERCOM_PADS(n)                       \
 	}
+#endif /* MCLK */
 
 #define SPI_SAM0_DEVICE_INIT(n)                                              \
 	SPI_SAM0_DEFINE_CONFIG(n);                                           \
