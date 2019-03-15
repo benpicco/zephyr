@@ -132,6 +132,9 @@ static void usb_sam0_load_padcal(void)
 	u32_t pad_transp;
 	u32_t pad_trim;
 
+#ifdef USB_FUSES_TRANSN_ADDR
+	pad_transn = *(uint32_t *)USB_FUSES_TRANSN_ADDR;
+#else
 	pad_transn = (*((uint32_t *)(NVMCTRL_OTP4) +
 			(NVM_USB_PAD_TRANSN_POS / 32)) >>
 		      (NVM_USB_PAD_TRANSN_POS % 32)) &
@@ -140,9 +143,13 @@ static void usb_sam0_load_padcal(void)
 	if (pad_transn == 0x1F) {
 		pad_transn = 5U;
 	}
+#endif
 
 	regs->PADCAL.bit.TRANSN = pad_transn;
 
+#ifdef USB_FUSES_TRANSP_ADDR
+	pad_transp = *(uint32_t *)USB_FUSES_TRANSP_ADDR;
+#else
 	pad_transp = (*((uint32_t *)(NVMCTRL_OTP4) +
 			(NVM_USB_PAD_TRANSP_POS / 32)) >>
 		      (NVM_USB_PAD_TRANSP_POS % 32)) &
@@ -151,9 +158,13 @@ static void usb_sam0_load_padcal(void)
 	if (pad_transp == 0x1F) {
 		pad_transp = 29U;
 	}
+#endif
 
 	regs->PADCAL.bit.TRANSP = pad_transp;
 
+#ifdef USB_FUSES_TRIM_ADDR
+	pad_trim = *(uint32_t *)USB_FUSES_TRIM_ADDR;
+#else
 	pad_trim = (*((uint32_t *)(NVMCTRL_OTP4) +
 		      (NVM_USB_PAD_TRIM_POS / 32)) >>
 		    (NVM_USB_PAD_TRIM_POS % 32)) &
@@ -162,6 +173,7 @@ static void usb_sam0_load_padcal(void)
 	if (pad_trim == 0x7) {
 		pad_trim = 3U;
 	}
+#endif
 
 	regs->PADCAL.bit.TRIM = pad_trim;
 }
@@ -172,15 +184,30 @@ int usb_dc_attach(void)
 	UsbDevice *regs = &REGS->DEVICE;
 	struct usb_sam0_data *data = usb_sam0_get_data();
 
+#ifdef MCLK
+	/* Enable the clock in MCLK */
+	MCLK->APBBMASK.bit.USB_ = 1;
+#else
 	/* Enable the clock in PM */
 	PM->APBBMASK.bit.USB_ = 1;
+#endif
 
 	/* Enable the GCLK */
+#ifdef GCLK_CLKCTRL_ID_USB
 	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_USB | GCLK_CLKCTRL_GEN_GCLK0 |
 			    GCLK_CLKCTRL_CLKEN;
+#else
+	GCLK->PCHCTRL[USB_GCLK_ID].reg = GCLK_PCHCTRL_GEN_GCLK0 |
+				     GCLK_PCHCTRL_CHEN;
+#endif
 
+#ifdef REG_GCLK_SYNCBUSY
+	while (GCLK->SYNCBUSY.bit.GENCTRL0) {
+	}
+#else
 	while (GCLK->STATUS.bit.SYNCBUSY) {
 	}
+#endif
 
 	/* Configure */
 	regs->CTRLA.bit.SWRST = 1;
