@@ -33,8 +33,31 @@ DEVICE_DECLARE(sam0_eic);
 
 static void wait_synchronization(void)
 {
+#ifdef REG_EIC_SYNCBUSY
+	while (EIC->SYNCBUSY.reg) {
+	}
+#else
 	while (EIC->STATUS.bit.SYNCBUSY) {
 	}
+#endif
+}
+
+static inline void _eic_enable(void)
+{
+#ifdef REG_EIC_CTRLA
+	EIC->CTRLA.bit.ENABLE = 1;
+#else
+	EIC->CTRL.bit.ENABLE = 1;
+#endif
+}
+
+static inline void _eic_disable(void)
+{
+#ifdef REG_EIC_CTRLA
+	EIC->CTRLA.bit.ENABLE = 0;
+#else
+	EIC->CTRL.bit.ENABLE = 0;
+#endif
 }
 
 static void sam0_eic_isr(void *arg)
@@ -108,7 +131,7 @@ int sam0_eic_acquire(int port, int pin, enum sam0_eic_trigger trigger,
 	/* Lock everything so it's safe to reconfigure */
 	key = irq_lock();
 	/* Disable the EIC for reconfiguration */
-	EIC->CTRL.bit.ENABLE = 0;
+	_eic_disable();
 
 	line_assignment = &dev_data->lines[line_index];
 
@@ -154,7 +177,7 @@ int sam0_eic_acquire(int port, int pin, enum sam0_eic_trigger trigger,
 	/* Apply the config to the EIC itself */
 	EIC->CONFIG[config_index].reg = config;
 
-	EIC->CTRL.bit.ENABLE = 1;
+	_eic_enable();
 	wait_synchronization();
 	/*
 	 * Errata: The EIC generates a spurious interrupt for the newly
@@ -166,7 +189,7 @@ int sam0_eic_acquire(int port, int pin, enum sam0_eic_trigger trigger,
 	return 0;
 
 err_in_use:
-	EIC->CTRL.bit.ENABLE = 1;
+	_eic_enable();
 	wait_synchronization();
 	irq_unlock(key);
 	return -EBUSY;
@@ -211,7 +234,7 @@ int sam0_eic_release(int port, int pin)
 	/* Lock everything so it's safe to reconfigure */
 	key = irq_lock();
 	/* Disable the EIC */
-	EIC->CTRL.bit.ENABLE = 0;
+	_eic_disable();
 	wait_synchronization();
 
 	/*
@@ -231,7 +254,7 @@ int sam0_eic_release(int port, int pin)
 	EIC->INTFLAG.reg = mask;
 
 done:
-	EIC->CTRL.bit.ENABLE = 1;
+	_eic_enable();
 	wait_synchronization();
 	irq_unlock(key);
 	return 0;
@@ -317,12 +340,21 @@ static int sam0_eic_init(struct device *dev)
 {
 	ARG_UNUSED(dev);
 
+#ifdef MCLK
+	/* Enable the EIC clock in APBAMASK */
+	MCLK->APBAMASK.reg |= MCLK_APBAMASK_EIC;
+
+	/* Enable the GCLK */
+	GCLK->PCHCTRL[EIC_GCLK_ID].reg = GCLK_PCHCTRL_GEN_GCLK0 |
+					 GCLK_PCHCTRL_CHEN;
+#else
 	/* Enable the EIC clock in PM */
 	PM->APBAMASK.bit.EIC_ = 1;
 
 	/* Enable the GCLK */
 	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_EIC | GCLK_CLKCTRL_GEN_GCLK0 |
 			    GCLK_CLKCTRL_CLKEN;
+#endif
 
 #ifdef DT_ATMEL_SAM0_EIC_0_IRQ_0
 	SAM0_EIC_IRQ_CONNECT(0);
@@ -373,7 +405,7 @@ static int sam0_eic_init(struct device *dev)
 	SAM0_EIC_IRQ_CONNECT(15);
 #endif
 
-	EIC->CTRL.bit.ENABLE = 1;
+	_eic_enable();
 	wait_synchronization();
 
 	return 0;
