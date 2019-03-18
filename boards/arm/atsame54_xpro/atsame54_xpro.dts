@@ -49,6 +49,13 @@
 	txpo = <0>;
 };
 
+&sercom7 {
+	status = "ok";
+	compatible = "atmel,sam0-i2c";
+	clock-frequency = <400000>;
+	label = "I2C_0";
+};
+
 &rtc {
 	status = "ok";
 };
