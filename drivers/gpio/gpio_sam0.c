@@ -94,9 +94,9 @@ static int gpio_sam0_config(struct device *dev, int access_op, u32_t pin,
 		 */
 		pincfg.bit.PMUXEN = 1;
 		if (pin & 1) {
-			regs->PMUX[pin / 2].bit.PMUXO = PORT_PMUX_PMUXE_A_Val;
+			regs->PMUX[pin / 2].bit.PMUXO = PORT_PMUX_PMUXO(0);
 		} else {
-			regs->PMUX[pin / 2].bit.PMUXE = PORT_PMUX_PMUXE_A_Val;
+			regs->PMUX[pin / 2].bit.PMUXE = PORT_PMUX_PMUXE(0);
 		}
 
 		enum sam0_eic_trigger trigger;
