@@ -17,12 +17,21 @@ LOG_MODULE_REGISTER(i2c_sam0);
 
 #include "i2c-priv.h"
 
+#ifndef SERCOM_I2CM_CTRLA_MODE_I2C_MASTER
+#define SERCOM_I2CM_CTRLA_MODE_I2C_MASTER SERCOM_I2CM_CTRLA_MODE(5)
+#endif
+
 struct i2c_sam0_dev_config {
 	SercomI2cm *regs;
 	u32_t bitrate;
+#ifdef MCLK
+	volatile u32_t *mclk;
+	u32_t mclk_mask;
+	u16_t gclk_core_id;
+#else
 	u32_t pm_apbcmask;
 	u16_t gclk_clkctrl_id;
-
+#endif
 	void (*irq_config_func)(struct device *dev);
 };
 
@@ -414,13 +423,20 @@ static int i2c_sam0_initialize(struct device *dev)
 	SercomI2cm *const i2c = cfg->regs;
 	int retval;
 
+#ifdef MCLK
+	/* Enable the GCLK */
+	GCLK->PCHCTRL[cfg->gclk_core_id].reg = GCLK_PCHCTRL_GEN_GCLK0 |
+					       GCLK_PCHCTRL_CHEN;
+	/* Enable SERCOM clock in MCLK */
+	*cfg->mclk |= cfg->mclk_mask;
+#else
 	/* Enable the GCLK */
 	GCLK->CLKCTRL.reg = cfg->gclk_clkctrl_id | GCLK_CLKCTRL_GEN_GCLK0 |
 			GCLK_CLKCTRL_CLKEN;
 
 	/* Enable SERCOM clock in PM */
 	PM->APBCMASK.reg |= cfg->pm_apbcmask;
-
+#endif
 	/* Disable all I2C interrupts */
 	i2c->INTENCLR.reg = SERCOM_I2CM_INTENCLR_MASK;
 
@@ -462,7 +478,19 @@ static const struct i2c_driver_api i2c_sam0_driver_api = {
 		.transfer = i2c_sam0_transfer,
 };
 
-#define I2C_SAM0_DEVICE(n)                                                     \
+#ifdef MCLK
+#define I2C_SAM0_CONFIG(n)                                                     \
+	static void i2c_sam_irq_config_##n(struct device *dev);                \
+	static const struct i2c_sam0_dev_config i2c_sam0_dev_config_##n = {    \
+		.regs = (SercomI2cm *)DT_I2C_SAM0_SERCOM##n##_BASE_ADDRESS,    \
+		.bitrate = DT_I2C_SAM0_SERCOM##n##_CLOCK_FREQUENCY,            \
+		.mclk = MCLK_SERCOM##n,                                        \
+		.mclk_mask = MCLK_SERCOM##n##_MASK,                            \
+		.gclk_core_id = SERCOM##n##_GCLK_ID_CORE,                      \
+		.irq_config_func = &i2c_sam_irq_config_##n                     \
+	};
+#else
+#define I2C_SAM0_CONFIG(n)                                                     \
 	static void i2c_sam_irq_config_##n(struct device *dev);                \
 	static const struct i2c_sam0_dev_config i2c_sam0_dev_config_##n = {    \
 		.regs = (SercomI2cm *)DT_I2C_SAM0_SERCOM##n##_BASE_ADDRESS,    \
@@ -470,7 +498,9 @@ static const struct i2c_driver_api i2c_sam0_driver_api = {
 		.pm_apbcmask = PM_APBCMASK_SERCOM##n,                          \
 		.gclk_clkctrl_id = GCLK_CLKCTRL_ID_SERCOM##n##_CORE,           \
 		.irq_config_func = &i2c_sam_irq_config_##n                     \
-	};                                                                     \
+	};
+#endif
+#define I2C_SAM0_DEVICE(n)                                                     \
 	static struct i2c_sam0_dev_data i2c_sam0_dev_data_##n;                 \
 	DEVICE_AND_API_INIT(i2c_sam0_##n,                                      \
 			    DT_I2C_SAM0_SERCOM##n##_LABEL,                     \
@@ -487,25 +517,41 @@ static const struct i2c_driver_api i2c_sam0_driver_api = {
 	}
 
 #if DT_I2C_SAM0_SERCOM0_BASE_ADDRESS
+I2C_SAM0_CONFIG(0);
 I2C_SAM0_DEVICE(0);
 #endif
 
 #if DT_I2C_SAM0_SERCOM1_BASE_ADDRESS
+I2C_SAM0_CONFIG(1);
 I2C_SAM0_DEVICE(1);
 #endif
 
 #if DT_I2C_SAM0_SERCOM2_BASE_ADDRESS
+I2C_SAM0_CONFIG(2);
 I2C_SAM0_DEVICE(2);
 #endif
 
 #if DT_I2C_SAM0_SERCOM3_BASE_ADDRESS
+I2C_SAM0_CONFIG(3);
 I2C_SAM0_DEVICE(3);
 #endif
 
 #if DT_I2C_SAM0_SERCOM4_BASE_ADDRESS
+I2C_SAM0_CONFIG(4);
 I2C_SAM0_DEVICE(4);
 #endif
 
 #if DT_I2C_SAM0_SERCOM5_BASE_ADDRESS
+I2C_SAM0_CONFIG(5);
 I2C_SAM0_DEVICE(5);
+#endif
+
+#if DT_I2C_SAM0_SERCOM6_BASE_ADDRESS
+I2C_SAM0_CONFIG(6);
+I2C_SAM0_DEVICE(6);
+#endif
+
+#if DT_I2C_SAM0_SERCOM7_BASE_ADDRESS
+I2C_SAM0_CONFIG(7);
+I2C_SAM0_DEVICE(7);
 #endif
