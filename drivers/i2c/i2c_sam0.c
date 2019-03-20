@@ -163,7 +163,9 @@ static int i2c_sam0_transfer(struct device *dev, struct i2c_msg *msgs,
 
 	for (; num_msgs > 0;) {
 		if (!msgs->len) {
-			return -EINVAL;
+			if ((msgs->flags & I2C_MSG_RW_MASK) == I2C_MSG_READ) {
+				return -EINVAL;
+			}
 		}
 
 		i2c->INTENCLR.reg = SERCOM_I2CM_INTENCLR_MASK;
@@ -437,6 +439,7 @@ static int i2c_sam0_initialize(struct device *dev)
 	/* Enable SERCOM clock in PM */
 	PM->APBCMASK.reg |= cfg->pm_apbcmask;
 #endif
+
 	/* Disable all I2C interrupts */
 	i2c->INTENCLR.reg = SERCOM_I2CM_INTENCLR_MASK;
 
