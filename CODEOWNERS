@@ -124,6 +124,7 @@
 /drivers/espi/                            @albertofloyd @franciscomunoz @scottwcpg
 /drivers/ps2/                             @albertofloyd @franciscomunoz @scottwcpg
 /drivers/ethernet/                        @jukkar @tbursztyka @pfalcon
+/drivers/entropy/*sam0*                   @benpicco
 /drivers/flash/                           @nashif
 /drivers/flash/*native_posix*             @vanwinkeljan @aescolar
 /drivers/flash/*spi_nor*                  @pabigot
