@@ -1,0 +1,37 @@
+# Kconfig.at86rf233 - Atmel AT86RF233 configuration options
+#
+#
+# Copyright (c) 2019 ML!PA Consulting GmbH
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+menuconfig  IEEE802154_AT86RF233
+	bool "Atmel AT86RF233 Driver support"
+	depends on NETWORKING && SPI
+
+if IEEE802154_AT86RF233
+
+config IEEE802154_AT86RF233_DRV_NAME
+	string "Atmel AT86RF233 Driver's name"
+	default "AT86RF233"
+	help
+	  This option sets the driver name. Do not change it unless
+	  you know what you are doing.
+
+config IEEE802154_AT86RF233_INIT_PRIO
+	int "AT86RF233 initialization priority"
+	default 80
+	help
+	  Set the initialization priority number. Do not change it unless
+	  you know what you are doing. It has to start before the net stack.
+
+config IEEE802154_AT86RF233_RX_STACK_SIZE
+	int "Driver's internal RX thread stack size"
+	default 800
+	help
+	  This option sets the driver's stack size for its internal RX thread.
+	  The default value should be sufficient, but in case it proves to be
+	  a too little one, this option makes it easy to play with the size.
+
+endif

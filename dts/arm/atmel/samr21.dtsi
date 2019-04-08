@@ -63,6 +63,27 @@
 
 &sercom4 {
 	interrupts = <13 0>;
+
+	status = "ok";
+
+	compatible = "atmel,sam0-spi";
+	cs-gpios = <&portb 31 0>;
+	dipo = <0>;
+	dopo = <1>;
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	at86rf233@0 {
+		reg = <0x0>;
+		compatible = "atmel,at86rf233";
+		label = "at86rf233";
+		spi-max-frequency = <5000000>;
+		irq-gpios = <&portb 0 0>;
+		reset-gpios = <&portb 15 0>;
+		slp_tr-gpios = <&porta 20 0>;
+		status = "ok";
+	};
 };
 
 &sercom5 {
