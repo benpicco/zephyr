@@ -88,6 +88,100 @@ static enum ieee802154_hw_caps mrf24j40_get_capabilities(struct device *dev)
 		| IEEE802154_HW_FILTER;
 }
 
+static bool mrf24j40_read_reg_short(struct mrf24j40_context *dev, u8_t addr, u8_t value)
+{
+	u8_t cmd_buf[2] = {
+		(addr << MRF24J40_ADDR_OFFSET) | MRF24J40_SHORT_ADDR_TRANS | MRF24J40_ACCESS_READ,
+		0
+	};
+	const struct spi_buf buf = {
+		.buf = cmd_buf,
+		.len = sizeof(cmd_buf)
+	};
+	const struct spi_buf_set tx = {
+		.buffers = &buf,
+		.count = 1
+	};
+	const struct spi_buf_set rx = {
+		.buffers = &buf,
+		.count = 1
+	};
+
+	if (spi_transceive(dev->spi, &dev->spi_cfg, &tx, &rx) == 0) {
+		return cmd_buf[1];
+	}
+
+	LOG_ERR("Failed");
+
+	return 0;
+}
+
+static bool mrf24j40_write_reg_short(struct mrf24j40_context *dev, u8_t addr, u8_t value)
+{
+	u8_t cmd_buf[2] = {
+		(addr << MRF24J40_ADDR_OFFSET) | MRF24J40_SHORT_ADDR_TRANS | MRF24J40_ACCESS_WRITE,
+		value
+	};
+	const struct spi_buf buf = {
+		.buf = cmd_buf,
+		.len = sizeof(cmd_buf)
+	};
+	const struct spi_buf_set tx = {
+		.buffers = &buf,
+		.count = 1
+	};
+
+	return spi_write(dev->spi, &dev->spi_cfg, &tx) == 0;
+}
+
+static bool mrf24j40_read_reg_long(struct mrf24j40_context *dev, u8_t addr, u8_t value)
+{
+	u8_t cmd_buf[2] = {
+		(addr >> 3) | MRF24J40_LONG_ADDR_TRANS,
+		(addr << 5) | MRF24J40_ACCESS_WRITE_LNG,
+		0
+	};
+	const struct spi_buf buf = {
+		.buf = cmd_buf,
+		.len = sizeof(cmd_buf)
+	};
+	const struct spi_buf_set tx = {
+		.buffers = &buf,
+		.count = 1
+	};
+	const struct spi_buf_set rx = {
+		.buffers = &buf,
+		.count = 1
+	};
+
+	if (spi_transceive(dev->spi, &dev->spi_cfg, &tx, &rx) == 0) {
+		return cmd_buf[2];
+	}
+
+	LOG_ERR("Failed");
+
+	return 0;
+}
+
+static bool mrf24j40_write_reg_long(struct mrf24j40_context *dev, u8_t addr, u8_t value)
+{
+	u8_t cmd_buf[3] = {
+		(addr >> 3) | MRF24J40_LONG_ADDR_TRANS,
+		(addr << 5) | MRF24J40_ACCESS_WRITE_LNG,
+		value
+	};
+	const struct spi_buf buf = {
+		.buf = cmd_buf,
+		.len = sizeof(cmd_buf)
+	};
+	const struct spi_buf_set tx = {
+		.buffers = &buf,
+		.count = 1
+	};
+
+	return spi_write(dev->spi, &dev->spi_cfg, &tx) == 0;
+}
+
 /* Note: CCA before TX is enabled by default */
 static int mrf24j40_cca(struct device *dev)
 {
