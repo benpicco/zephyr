@@ -88,7 +88,24 @@ static enum ieee802154_hw_caps mrf24j40_get_capabilities(struct device *dev)
 		| IEEE802154_HW_FILTER;
 }
 
-static bool mrf24j40_read_reg_short(struct mrf24j40_context *dev, u8_t addr, u8_t value)
+static void mrf24j40_hardware_reset(struct device *dev)
+{
+	set_reset(dev, 0);
+	k_busy_wait(20000U);
+	set_reset(dev, 1);
+	k_busy_wait(2000U);
+}
+
+static void mrf24j40_state_machine_reset(struct mrf24j40_context *mrf24j40) {
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, MRF24J40_RFCTL_RFRST);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, 0);
+
+	k_busy_wait(192);
+	while (mrf24j40_read_reg_long(mrf24j40, MRF24J40_REG_RFSTATE) & MRF24J40_RFSTATE_MASK
+	       != MRF24J40_RFSTATE_RX) {}
+}
+
+static u8_t mrf24j40_read_reg_short(struct mrf24j40_context *dev, u8_t addr)
 {
 	u8_t cmd_buf[2] = {
 		(addr << MRF24J40_ADDR_OFFSET) | MRF24J40_SHORT_ADDR_TRANS | MRF24J40_ACCESS_READ,
@@ -134,7 +151,7 @@ static bool mrf24j40_write_reg_short(struct mrf24j40_context *dev, u8_t addr, u8
 	return spi_write(dev->spi, &dev->spi_cfg, &tx) == 0;
 }
 
-static bool mrf24j40_read_reg_long(struct mrf24j40_context *dev, u8_t addr, u8_t value)
+static u8_t mrf24j40_read_reg_long(struct mrf24j40_context *dev, u8_t addr)
 {
 	u8_t cmd_buf[2] = {
 		(addr >> 3) | MRF24J40_LONG_ADDR_TRANS,
@@ -185,32 +202,79 @@ static bool mrf24j40_write_reg_long(struct mrf24j40_context *dev, u8_t addr, u8_
 /* Note: CCA before TX is enabled by default */
 static int mrf24j40_cca(struct device *dev)
 {
+	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+
+	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
 	// TODO
+
+	k_mutex_unlock(&mrf24j40->phy_mutex);
+
 	return -EIO;
 }
 
 static int mrf24j40_set_channel(struct device *dev, u16_t channel)
 {
-	// TODO
-	return -EIO;
+	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+
+	if (channel < 11 || channel > 26) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCON0, 16 * (channel - 11) + 3);
+
+	mrf24j40_state_machine_reset(mrf24j40);
+
+	k_mutex_unlock(&mrf24j40->phy_mutex);
+
+	return 0;
 }
 
 static int mrf24j40_set_pan_id(struct device *dev, u16_t pan_id)
 {
-	// TODO
-	return -EIO;
+	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+
+	pan_id = sys_le16_to_cpu(pan_id);
+	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_PANIDL, pan_id & 0xFF);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_PANIDH, pan_id >> 8);
+
+	k_mutex_unlock(&mrf24j40->phy_mutex);
+
+	return 0;
 }
 
 static int mrf24j40_set_short_addr(struct device *dev, u16_t short_addr)
 {
-	// TODO
-	return -EIO;
+	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+
+	short_addr = sys_le16_to_cpu(short_addr);
+	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SADRL, short_addr & 0xFF);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SADRH, short_addr >> 8);
+
+	k_mutex_unlock(&mrf24j40->phy_mutex);
+
+	return 0;
 }
 
 static int mrf24j40_set_ieee_addr(struct device *dev, const u8_t *ieee_addr)
 {
-	// TODO
-	return -EIO;
+	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+
+	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
+	for (int i = 0; i < 8; ++i) {
+		mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_EADR0 + i, ieee_addr[i]);
+	}
+
+	k_mutex_unlock(&mrf24j40->phy_mutex);
+
+	return 0;
 }
 
 static int mrf24j40_filter(struct device *dev,
@@ -237,7 +301,14 @@ static int mrf24j40_filter(struct device *dev,
 
 static int mrf24j40_set_txpower(struct device *dev, s16_t dbm)
 {
+	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+
+	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
 	// TODO
+
+	k_mutex_unlock(&mrf24j40->phy_mutex);
+
 	return -EIO;
 }
 
@@ -281,9 +352,51 @@ static int power_on_and_setup(struct device *dev)
 {
 	struct mrf24j40_context *mrf24j40 = dev->driver_data;
 
-	// TODO
+	mrf24j40_hardware_reset(dev);
+
+	/* do a soft reset */
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SOFTRST, MRF24J40_SOFTRST_RSTPWR |
+								 MRF24J40_SOFTRST_RSTBB  |
+								 MRF24J40_SOFTRST_RSTMAC);
+	/* flush RX FIFO */
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RXFLUSH, MRF24J40_RXFLUSH_RXFLUSH);
+
+	/* Here starts init-process as described on MRF24J40 Manual Chap. 3.2 */
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_PACON2, MRF24J40_PACON2_TXONTS2 |
+								MRF24J40_PACON2_TXONTS1 |
+								MRF24J40_PACON2_FIFOEN);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_TXSTBL, MRF24J40_TXSTBL_RFSTBL3 |
+								MRF24J40_TXSTBL_RFSTBL0 |
+								MRF24J40_TXSTBL_MSIFS2  |
+								MRF24J40_TXSTBL_MSIFS0);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_RFCON1, MRF24J40_RFCON1_VCOOPT1);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_RFCON2, MRF24J40_RFCON2_PLLEN);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_RFCON6, MRF24J40_RFCON6_TXFIL |
+							       MRF24J40_RFCON6_20MRECVR);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_RFCON7, MRF24J40_RFCON7_SLPCLKSEL1);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_RFCON8, MRF24J40_RFCON8_RFVCO);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_SLPCON1, MRF24J40_SLPCON1_CLKOUTEN |
+								MRF24J40_SLPCON1_SLPCLKDIV0);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_BBREG2, MRF25J40_BBREG2_CCAMODE1);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_CCAEDTH, 0x60);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_BBREG6, MRF24J40_BBREG6_RSSIMODE2);
+
+	/* Enable immediate sleep mode */
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_WAKECON, MRF24J40_WAKECON_IMMWAKE);
+
+	/* set interrupt pin polarity, rising edge */
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SLPCON0, MRF24J40_SLPCON0_INTEDGE);
+
+	mrf24j40_state_machine_reset(mrf24j40);
+
+	/* clear interrupts */
+	mrf24j40_read_reg_short(mrf24j40, MRF24J40_REG_INTSTAT);
 
 	setup_gpio_callbacks(mrf24j40);
+
+	/* set interrupt sources */
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_INTCON,
+				~(MRF24J40_INTCON_RXIE | MRF24J40_INTCON_TXNIE);
 
 	return 0;
 }
