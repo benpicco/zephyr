@@ -335,7 +335,14 @@ static int mrf24j40_start(struct device *dev)
 
 	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
 
-	// TODO
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_WAKECON,
+				 MRF24J40_WAKECON_IMMWAKE | MRF24J40_WAKECON_REGWAKE);
+
+	k_busy_wait(50);
+	mrf24j40_reset_state_machine(mrf24j40);
+
+	/* clear interrupts */
+	mrf24j40_read_reg_short(mrf24j40, MRF24J40_REG_INTSTAT);
 
 	k_mutex_unlock(&mrf24j40->phy_mutex);
 	return 0;
@@ -344,8 +351,16 @@ static int mrf24j40_start(struct device *dev)
 // power down
 static int mrf24j40_stop(struct device *dev)
 {
-	// TODO
-	return -EIO;
+	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+
+	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SOFTRST, MRF24J40_SOFTRST_RSTPWR);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SLPACK, MRF24J40_SLPACK_SLPACK);
+
+	k_mutex_unlock(&mrf24j40->phy_mutex);
+
+	return 0;
 }
 
 static int power_on_and_setup(struct device *dev)
