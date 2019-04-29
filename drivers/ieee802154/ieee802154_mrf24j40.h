@@ -31,7 +31,7 @@ struct mrf24j40_context {
 	struct k_sem isr_sem;
 	/************RX************/
 	K_THREAD_STACK_MEMBER(mrf24j40_rx_stack,
-			      CONFIG_MRF24J40_RX_STACK_SIZE);
+			      CONFIG_IEEE802154_MRF24J40_RX_STACK_SIZE);
 	struct k_thread mrf24j40_rx_thread;
 };
 

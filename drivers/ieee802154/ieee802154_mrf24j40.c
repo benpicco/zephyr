@@ -96,15 +96,6 @@ static void mrf24j40_hardware_reset(struct device *dev)
 	k_busy_wait(2000U);
 }
 
-static void mrf24j40_state_machine_reset(struct mrf24j40_context *mrf24j40) {
-	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, MRF24J40_RFCTL_RFRST);
-	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, 0);
-
-	k_busy_wait(192);
-	while (mrf24j40_read_reg_long(mrf24j40, MRF24J40_REG_RFSTATE) & MRF24J40_RFSTATE_MASK
-	       != MRF24J40_RFSTATE_RX) {}
-}
-
 static u8_t mrf24j40_read_reg_short(struct mrf24j40_context *dev, u8_t addr)
 {
 	u8_t cmd_buf[2] = {
@@ -151,9 +142,9 @@ static bool mrf24j40_write_reg_short(struct mrf24j40_context *dev, u8_t addr, u8
 	return spi_write(dev->spi, &dev->spi_cfg, &tx) == 0;
 }
 
-static u8_t mrf24j40_read_reg_long(struct mrf24j40_context *dev, u8_t addr)
+static u8_t mrf24j40_read_reg_long(struct mrf24j40_context *dev, u16_t addr)
 {
-	u8_t cmd_buf[2] = {
+	u8_t cmd_buf[3] = {
 		(addr >> 3) | MRF24J40_LONG_ADDR_TRANS,
 		(addr << 5) | MRF24J40_ACCESS_WRITE_LNG,
 		0
@@ -180,7 +171,7 @@ static u8_t mrf24j40_read_reg_long(struct mrf24j40_context *dev, u8_t addr)
 	return 0;
 }
 
-static bool mrf24j40_write_reg_long(struct mrf24j40_context *dev, u8_t addr, u8_t value)
+static bool mrf24j40_write_reg_long(struct mrf24j40_context *dev, u16_t addr, u8_t value)
 {
 	u8_t cmd_buf[3] = {
 		(addr >> 3) | MRF24J40_LONG_ADDR_TRANS,
@@ -197,6 +188,15 @@ static bool mrf24j40_write_reg_long(struct mrf24j40_context *dev, u8_t addr, u8_
 	};
 
 	return spi_write(dev->spi, &dev->spi_cfg, &tx) == 0;
+}
+
+static void mrf24j40_state_machine_reset(struct mrf24j40_context *mrf24j40) {
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, MRF24J40_RFCTL_RFRST);
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, 0);
+
+	k_busy_wait(192);
+	while ((mrf24j40_read_reg_long(mrf24j40, MRF24J40_REG_RFSTATE) & MRF24J40_RFSTATE_MASK)
+	       != MRF24J40_RFSTATE_RX) {}
 }
 
 /* Note: CCA before TX is enabled by default */
@@ -223,7 +223,7 @@ static int mrf24j40_set_channel(struct device *dev, u16_t channel)
 
 	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
 
-	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCON0, 16 * (channel - 11) + 3);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_RFCON0, 16 * (channel - 11) + 3);
 
 	mrf24j40_state_machine_reset(mrf24j40);
 
@@ -339,7 +339,7 @@ static int mrf24j40_start(struct device *dev)
 				 MRF24J40_WAKECON_IMMWAKE | MRF24J40_WAKECON_REGWAKE);
 
 	k_busy_wait(50);
-	mrf24j40_reset_state_machine(mrf24j40);
+	mrf24j40_state_machine_reset(mrf24j40);
 
 	/* clear interrupts */
 	mrf24j40_read_reg_short(mrf24j40, MRF24J40_REG_INTSTAT);
@@ -400,7 +400,7 @@ static int power_on_and_setup(struct device *dev)
 	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_WAKECON, MRF24J40_WAKECON_IMMWAKE);
 
 	/* set interrupt pin polarity, rising edge */
-	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SLPCON0, MRF24J40_SLPCON0_INTEDGE);
+	mrf24j40_write_reg_long(mrf24j40, MRF24J40_REG_SLPCON0, MRF24J40_SLPCON0_INTEDGE);
 
 	mrf24j40_state_machine_reset(mrf24j40);
 
@@ -411,7 +411,7 @@ static int power_on_and_setup(struct device *dev)
 
 	/* set interrupt sources */
 	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_INTCON,
-				~(MRF24J40_INTCON_RXIE | MRF24J40_INTCON_TXNIE);
+				~(MRF24J40_INTCON_RXIE | MRF24J40_INTCON_TXNIE));
 
 	return 0;
 }

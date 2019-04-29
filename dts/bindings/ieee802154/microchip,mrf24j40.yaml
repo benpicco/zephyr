@@ -15,7 +15,7 @@ inherits:
 
 properties:
     compatible:
-      constraint: "Microchip,mrf24j40"
+      constraint: "microchip,mrf24j40"
 
     irq-gpios:
       type: compound
