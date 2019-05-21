@@ -87,6 +87,9 @@ static int atmel_samd_init(struct device *arg)
 
 	key = irq_lock();
 
+	/* enable the Cortex M Cache Controller */
+	CMCC->CTRL.bit.CEN = 1;
+
 	z_clearfaults();
 	osc32k_init();
 	dfll48_init();
