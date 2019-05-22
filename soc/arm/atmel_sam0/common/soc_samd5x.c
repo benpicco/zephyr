@@ -90,7 +90,6 @@ static int atmel_samd_init(struct device *arg)
 	/* enable the Cortex M Cache Controller */
 	CMCC->CTRL.bit.CEN = 1;
 
-	z_clearfaults();
 	osc32k_init();
 	dfll48_init();
 	dpll0_init(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC);
