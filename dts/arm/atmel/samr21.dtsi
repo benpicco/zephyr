@@ -78,7 +78,7 @@
 		reg = <0x0>;
 		compatible = "atmel,at86rf233";
 		label = "at86rf233";
-		spi-max-frequency = <5000000>;
+		spi-max-frequency = <1000000>;
 		irq-gpios = <&portb 0 0>;
 		reset-gpios = <&portb 15 0>;
 		slp_tr-gpios = <&porta 20 0>;
