@@ -146,7 +146,7 @@ static u8_t mrf24j40_read_reg_long(struct mrf24j40_context *dev, u16_t addr)
 {
 	u8_t cmd_buf[3] = {
 		(addr >> 3) | MRF24J40_LONG_ADDR_TRANS,
-		(addr << 5) | MRF24J40_ACCESS_WRITE_LNG,
+		(addr << 5) | MRF24J40_ACCESS_READ,
 		0
 	};
 	const struct spi_buf buf = {
