@@ -203,14 +203,20 @@ static void mrf24j40_state_machine_reset(struct mrf24j40_context *mrf24j40) {
 static int mrf24j40_cca(struct device *dev)
 {
 	struct mrf24j40_context *mrf24j40 = dev->driver_data;
+	uint8_t ccaedth, rssi;
 
 	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
 
-	// TODO
+	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_BBREG6, MRF24J40_BBREG6_RSSIMODE1);
+
+	while (!(mrf24j40_read_reg_short(mrf24j40, MRF24J40_REG_BBREG6) & MRF24J40_BBREG2_RSSIRDY)) {}
+
+	ccaedth = mrf24j40_read_reg_short(mrf24j40, MRF24J40_REG_CCAEDTH);
+	rssi    = mrf24j40_read_reg_long(mrf24j40, MRF24J40_REG_RSSI);
 
 	k_mutex_unlock(&mrf24j40->phy_mutex);
 
-	return -EIO;
+	return rssi < ccaedth ? 0 : -EBUSY;
 }
 
 static int mrf24j40_set_channel(struct device *dev, u16_t channel)
@@ -309,7 +315,7 @@ static int mrf24j40_set_txpower(struct device *dev, s16_t dbm)
 
 	k_mutex_unlock(&mrf24j40->phy_mutex);
 
-	return -EIO;
+	return 0;
 }
 
 static int mrf24j40_tx(struct device *dev,
