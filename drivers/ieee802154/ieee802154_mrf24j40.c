@@ -341,6 +341,8 @@ static int mrf24j40_start(struct device *dev)
 
 	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
 
+	enable_irq_interrupt(mrf24j40, false);
+
 	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_WAKECON,
 				 MRF24J40_WAKECON_IMMWAKE | MRF24J40_WAKECON_REGWAKE);
 
@@ -349,6 +351,8 @@ static int mrf24j40_start(struct device *dev)
 
 	/* clear interrupts */
 	mrf24j40_read_reg_short(mrf24j40, MRF24J40_REG_INTSTAT);
+
+	enable_irq_interrupt(mrf24j40, true);
 
 	k_mutex_unlock(&mrf24j40->phy_mutex);
 	return 0;
@@ -360,6 +364,8 @@ static int mrf24j40_stop(struct device *dev)
 	struct mrf24j40_context *mrf24j40 = dev->driver_data;
 
 	k_mutex_lock(&mrf24j40->phy_mutex, K_FOREVER);
+
+	enable_irq_interrupt(mrf24j40, false);
 
 	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SOFTRST, MRF24J40_SOFTRST_RSTPWR);
 	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_SLPACK, MRF24J40_SLPACK_SLPACK);
