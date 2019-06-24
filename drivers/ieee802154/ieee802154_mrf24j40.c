@@ -190,6 +190,69 @@ static bool mrf24j40_write_reg_long(struct mrf24j40_context *dev, u16_t addr, u8
 	return spi_write(dev->spi, &dev->spi_cfg, &tx) == 0;
 }
 
+static bool mrf24j40_read_rx_fifo(struct mrf24j40_context *dev, u16_t offset, struct net_buf *buf, u8_t len)
+{
+	offset += MRF24J40_RX_FIFO;
+
+	u8_t cmd_buf[2] = {
+		MRF24J40_LONG_ADDR_TRANS | (offset >> 3),
+		MRF24J40_ACCESS_READ | (offset << 5)
+	};
+
+	struct spi_buf bufs[2] = {
+		{
+			.buf = &cmd_buf,
+			.len = sizeof(cmd_buf)
+		},
+		{
+			.buf = buf->data,
+			.len = len
+		}
+	};
+	const struct spi_buf_set tx = {
+		.buffers = bufs,
+		.count = 1
+	};
+	const struct spi_buf_set rx = {
+		.buffers = bufs,
+		.count = 2
+	};
+
+	if (spi_transceive(dev->spi, &dev->spi_cfg, &tx, &rx) != 0) {
+		return false;
+	}
+
+	net_buf_add(buf, len);
+
+	return true;
+}
+
+static bool mrf24j40_write_tx_fifo(struct mrf24j40_context *dev, u16_t offset, struct net_buf *frag)
+{
+	u8_t cmd_buf[2] = {
+		MRF24J40_LONG_ADDR_TRANS | (offset >> 3),
+		MRF24J40_ACCESS_WRITE_LNG| (offset << 5)
+	};
+
+	const struct spi_buf bufs[2] = {
+		{
+			.buf = cmd_buf,
+			.len = sizeof(cmd_buf)
+		},
+		{
+			.buf = frag->data,
+			.len = frag->len
+		}
+	};
+
+	const struct spi_buf_set tx = {
+		.buffers = bufs,
+		.count = 2
+	};
+
+	return spi_write(dev->spi, &dev->spi_cfg, &tx) == 0;
+}
+
 static void mrf24j40_state_machine_reset(struct mrf24j40_context *mrf24j40) {
 	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, MRF24J40_RFCTL_RFRST);
 	mrf24j40_write_reg_short(mrf24j40, MRF24J40_REG_RFCTL, 0);
