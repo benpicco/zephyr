@@ -8,11 +8,7 @@ compatible: "atmel,sam0-nvmctrl"
 include: flash-controller.yaml
 
 properties:
-    compatible:
-      constraint: "atmel,sam0-nvmctrl"
-
     lock-regions:
       type: int
-      category: required
-      generation: define
+      required: true
       description: Number of lock regions
