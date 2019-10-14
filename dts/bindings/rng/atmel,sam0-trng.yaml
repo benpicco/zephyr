@@ -11,20 +11,14 @@ description: >
 
 compatible: "atmel,sam0-trng"
 
+include: base.yaml
+
 properties:
     reg:
-      type: int
-      description: mmio register space
       required: true
 
     interrupts:
-      type: compound
       required: true
-      description: required interrupts
 
     label:
-      type: string
       required: true
-      description: Human readable string describing the device (used by Zephyr for API name)
-
-...
