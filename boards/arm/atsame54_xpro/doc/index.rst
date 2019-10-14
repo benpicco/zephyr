@@ -76,7 +76,7 @@ Pin Mapping
 The SAM E54 Xplained Pro evaluation kit has 4 GPIO controllers. These
 controllers are responsible for pin muxing, input/output, pull-up, etc.
 
-For mode details please refer to `SAM D5x/E5x Family Datasheet`_ and the `SAM E54
+For more details please refer to `SAM D5x/E5x Family Datasheet`_ and the `SAM E54
 Xplained Pro Schematic`_.
 
 .. image:: img/ATSAME54-XPRO-pinout.png
