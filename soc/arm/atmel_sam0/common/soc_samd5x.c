@@ -16,6 +16,10 @@
 #include <kernel.h>
 #include <soc.h>
 
+#define SAM0_DFLL_FREQ_HZ			(48000000U)
+#define SAM0_DPLL_FREQ_MIN_HZ		(96000000U)
+#define SAM0_DPLL_FREQ_MAX_HZ		(200000000U)
+
 #if CONFIG_SOC_ATMEL_SAMD5X_XOSC32K_AS_MAIN
 static void osc32k_init(void)
 {
@@ -40,48 +44,46 @@ static void osc32k_init(void)
 #error "No Clock Source selected."
 #endif
 
-static void dpll0_init(u32_t f_cpu)
+static void dpll_init(u8_t n, u32_t f_cpu)
 {
-	const u32_t LDR = ((f_cpu * 16) / SOC_ATMEL_SAM0_OSC32K_FREQ_HZ);
+	/* We source the DPLL from 32kHz GCLK1 */
+	const uint32_t LDR = ((f_cpu << 5) / SOC_ATMEL_SAM0_OSC32K_FREQ_HZ);
 
-	/* source FDPLL from 32kHz clock */
-	GCLK->PCHCTRL[OSCCTRL_GCLK_ID_FDPLL0].reg = GCLK_PCHCTRL_GEN(1)
-						  | GCLK_PCHCTRL_CHEN;
-	while (!(GCLK->PCHCTRL[OSCCTRL_GCLK_ID_FDPLL0].reg & GCLK_PCHCTRL_CHEN)) {
-	}
+	/* disable the DPLL before changing the configuration */
+	OSCCTRL->Dpll[n].DPLLCTRLA.bit.ENABLE = 0;
+	while (OSCCTRL->Dpll[n].DPLLSYNCBUSY.reg) {}
 
-	GCLK->PCHCTRL[OSCCTRL_GCLK_ID_FDPLL032K].reg = GCLK_PCHCTRL_GEN(1)
-						     | GCLK_PCHCTRL_CHEN;
-	while (!(GCLK->PCHCTRL[OSCCTRL_GCLK_ID_FDPLL032K].reg & GCLK_PCHCTRL_CHEN)) {
-	}
+	/* set DPLL clock source to 32kHz GCLK1 */
+	GCLK->PCHCTRL[OSCCTRL_GCLK_ID_FDPLL0 + n].reg = GCLK_PCHCTRL_GEN(1) | GCLK_PCHCTRL_CHEN;
+	while (!(GCLK->PCHCTRL[OSCCTRL_GCLK_ID_FDPLL0 + n].reg & GCLK_PCHCTRL_CHEN)) {}
 
-	OSCCTRL->Dpll[0].DPLLRATIO.reg = OSCCTRL_DPLLRATIO_LDRFRAC(LDR % 16)
-				       | OSCCTRL_DPLLRATIO_LDR((LDR / 16) - 1);
+	OSCCTRL->Dpll[n].DPLLRATIO.reg = OSCCTRL_DPLLRATIO_LDRFRAC(LDR & 0x1F)
+	                               | OSCCTRL_DPLLRATIO_LDR((LDR >> 5) - 1);
 
-	OSCCTRL->Dpll[0].DPLLCTRLB.reg = OSCCTRL_DPLLCTRLB_REFCLK_XOSC32
-				       | OSCCTRL_DPLLCTRLB_DIV(1)
-				       | OSCCTRL_DPLLCTRLB_WUF
-				       | OSCCTRL_DPLLCTRLB_LBYPASS;
+	/* Without LBYPASS, startup takes very long, see errata section 2.13. */
+	OSCCTRL->Dpll[n].DPLLCTRLB.reg = OSCCTRL_DPLLCTRLB_REFCLK_GCLK
+	                               | OSCCTRL_DPLLCTRLB_WUF
+	                               | OSCCTRL_DPLLCTRLB_LBYPASS;
 
-	OSCCTRL->Dpll[0].DPLLCTRLA.reg = OSCCTRL_DPLLCTRLA_ENABLE;
+	OSCCTRL->Dpll[n].DPLLCTRLA.reg = OSCCTRL_DPLLCTRLA_ENABLE;
 
-	while (!OSCCTRL->Dpll[0].DPLLSTATUS.bit.CLKRDY ||
-	       !OSCCTRL->Dpll[0].DPLLSTATUS.bit.LOCK) {
-	}
+	while (OSCCTRL->Dpll[n].DPLLSYNCBUSY.reg) {}
+	while (!(OSCCTRL->Dpll[n].DPLLSTATUS.bit.CLKRDY &&
+	         OSCCTRL->Dpll[n].DPLLSTATUS.bit.LOCK)) {}
 
-	GCLK->GENCTRL[0].reg = GCLK_GENCTRL_SRC(GCLK_SOURCE_DPLL0)
-			     | GCLK_GENCTRL_GENEN;
 }
 
-static void dfll48_init(void)
+static void gclk_connect(u8_t gclk, u8_t src, u8_t div)
 {
-	GCLK->GENCTRL[2].reg = GCLK_GENCTRL_SRC(GCLK_SOURCE_DFLL48M)
-			     | GCLK_GENCTRL_GENEN;
+	GCLK->GENCTRL[gclk].reg = GCLK_GENCTRL_SRC(src)
+							| GCLK_GENCTRL_DIV(div)
+							| GCLK_GENCTRL_GENEN;
 }
 
 static int atmel_samd_init(struct device *arg)
 {
 	u32_t key;
+	u8_t dfll_div = CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC < SAM0_DPLL_FREQ_MIN_HZ ? 2 : 1;
 
 	ARG_UNUSED(arg);
 
@@ -91,8 +93,10 @@ static int atmel_samd_init(struct device *arg)
 	CMCC->CTRL.bit.CEN = 1;
 
 	osc32k_init();
-	dfll48_init();
-	dpll0_init(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC);
+	dpll_init(0, dfll_div * CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC);
+
+	gclk_connect(0, GCLK_SOURCE_DPLL0, dfll_div);
+	gclk_connect(2, GCLK_SOURCE_DFLL48M, 0);
 
 	/* Install default handler that simply resets the CPU
 	 * if configured in the kernel, NOP otherwise
