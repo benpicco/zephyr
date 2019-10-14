@@ -47,6 +47,8 @@
 	current-speed = <115200>;
 	rxpo = <1>;
 	txpo = <0>;
+	#address-cells = <1>;
+	#size-cells = <0>;
 };
 
 &sercom4 {
@@ -55,6 +57,8 @@
 	dipo = <3>;
 	dopo = <0>;
 	label = "SPI_0";
+	#address-cells = <1>;
+	#size-cells = <0>;
 };
 
 &sercom7 {
@@ -62,6 +66,8 @@
 	compatible = "atmel,sam0-i2c";
 	clock-frequency = <I2C_BITRATE_FAST>;
 	label = "I2C_0";
+	#address-cells = <1>;
+	#size-cells = <0>;
 };
 
 &adc0 {
