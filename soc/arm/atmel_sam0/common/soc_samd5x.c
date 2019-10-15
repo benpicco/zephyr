@@ -16,7 +16,7 @@
 #include <kernel.h>
 #include <soc.h>
 
-#define SAM0_DFLL_FREQ_HZ			(48000000U)
+#define SAM0_DFLL_FREQ_HZ		(48000000U)
 #define SAM0_DPLL_FREQ_MIN_HZ		(96000000U)
 #define SAM0_DPLL_FREQ_MAX_HZ		(200000000U)
 
@@ -73,17 +73,39 @@ static void dpll_init(u8_t n, u32_t f_cpu)
 
 }
 
+static void dfll_init(void)
+{
+	uint32_t reg = OSCCTRL_DFLLCTRLB_QLDIS
+#ifdef OSCCTRL_DFLLCTRLB_WAITLOCK
+		     | OSCCTRL_DFLLCTRLB_WAITLOCK
+#endif
+	;
+
+	OSCCTRL->DFLLCTRLB.reg = reg;
+	OSCCTRL->DFLLCTRLA.reg = OSCCTRL_DFLLCTRLA_ENABLE;
+
+	while (!OSCCTRL->STATUS.bit.DFLLRDY) {}
+}
+
 static void gclk_connect(u8_t gclk, u8_t src, u8_t div)
 {
 	GCLK->GENCTRL[gclk].reg = GCLK_GENCTRL_SRC(src)
-							| GCLK_GENCTRL_DIV(div)
-							| GCLK_GENCTRL_GENEN;
+				| GCLK_GENCTRL_DIV(div)
+				| GCLK_GENCTRL_GENEN;
 }
 
 static int atmel_samd_init(struct device *arg)
 {
 	u32_t key;
-	u8_t dfll_div = CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC < SAM0_DPLL_FREQ_MIN_HZ ? 2 : 1;
+	u8_t dfll_div;
+
+	if (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC < SAM0_DFLL_FREQ_HZ) {
+		dfll_div = 3;
+	} else if (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC < SAM0_DPLL_FREQ_MIN_HZ) {
+		dfll_div = 2;
+	} else {
+		dfll_div = 1;
+	}
 
 	ARG_UNUSED(arg);
 
@@ -93,9 +115,13 @@ static int atmel_samd_init(struct device *arg)
 	CMCC->CTRL.bit.CEN = 1;
 
 	osc32k_init();
+	dfll_init();
 	dpll_init(0, dfll_div * CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC);
 
+	/* use DPLL for main clock */
 	gclk_connect(0, GCLK_SOURCE_DPLL0, dfll_div);
+
+	/* connect GCLK2 to 48 MHz DFLL for USB */
 	gclk_connect(2, GCLK_SOURCE_DFLL48M, 0);
 
 	/* Install default handler that simply resets the CPU
