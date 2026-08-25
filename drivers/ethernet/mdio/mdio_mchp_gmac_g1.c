@@ -11,11 +11,20 @@
 #include <zephyr/net/mdio.h>
 #include <zephyr/logging/log.h>
 
+#if defined(CONFIG_SOC_SERIES_PIC32CX_BZ62)
+/*
+ * BZ6's ETH peripheral is register-compatible with the GMAC IP block this
+ * driver is written against, but its SoC header uses "ETH_"-prefixed names
+ * instead of "GMAC_". Pull in the aliases needed to build unmodified.
+ */
+#include "../eth_mchp_gmac_g1_bz6.h"
+#endif
+
 LOG_MODULE_REGISTER(mdio_mchp_gmac_g1, CONFIG_MDIO_LOG_LEVEL);
 
 #define DT_DRV_COMPAT microchip_gmac_g1_mdio
 
-#define MDIO_MCHP_OP_TIMEOUT 25
+#define MDIO_MCHP_OP_TIMEOUT 50
 
 struct mdio_dev_data {
 	struct k_mutex reg_mutex;
