@@ -1,0 +1,38 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <mem.h>
+#include <microchip/pic32c/pic32cx_bz/bz6x/common/pic32cxxbz6x.dtsi>
+
+/ {
+	soc {
+		gmac: ethernet@4100a000 {
+			compatible = "microchip,gmac-g1-eth";
+			reg = <0x4100a000 0x400>;
+			interrupts = <53 6>;
+			interrupt-names = "gmac";
+			num-queues = <1>;
+			clocks = <&gclkperiph CLOCK_MCHP_GCLKPERIPH_ID_GCLK_ETH>,
+				 <&gclkperiph CLOCK_MCHP_GCLKPERIPH_ID_GCLK_ETH>;
+			clock-names = "mclk-ahb", "mclk-apb";
+			status = "disabled";
+
+			mdio: mdio {
+				compatible = "microchip,gmac-g1-mdio";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				status = "disabled";
+			};
+		};
+	};
+};
+
+&gclkperiph {
+	gclkperiph_eth {
+		subsystem = <CLOCK_MCHP_GCLKPERIPH_ID_GCLK_ETH>;
+		gclkperiph-src-sel = "refclk_1";
+	};
+};
