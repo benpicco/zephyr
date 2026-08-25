@@ -14,6 +14,10 @@
 #include <zephyr/types.h>
 #include <zephyr/sys/ring_buffer.h>
 
+#if defined(CONFIG_SOC_SERIES_PIC32CX_BZ62)
+#include "eth_mchp_gmac_g1_bz6.h"
+#endif
+
 LOG_MODULE_REGISTER(eth_mchp_gmac_g1, CONFIG_ETHERNET_LOG_LEVEL);
 
 #define DT_DRV_COMPAT microchip_gmac_g1_eth
@@ -316,6 +320,12 @@ static void gmac_tx_completed(gmac_registers_t *gmac, struct gmac_queue *queue)
 	struct net_buf *frag;
 	uintptr_t ptr;
 
+	/* GMAC_ISR.TCOMP mirrors GMAC_TSR.TXCOMP; clearing GMAC_ISR alone does
+	 * not clear the underlying status bit, which keeps the IRQ line
+	 * asserted and causes the ISR to be re-entered continuously.
+	 */
+	gmac->GMAC_TSR = GMAC_TSR_TXCOMP_Msk;
+
 	__ASSERT(tx_desc_list->buf_desc[tx_desc_list->tail].status & GMAC_TXW1_USED,
 		 "first buffer of a frame is not marked as own by GMAC");
 	while (tx_desc_list->tail != tx_desc_list->head) {
@@ -420,6 +430,14 @@ static int gmac_init(const struct device *dev, gmac_registers_t *gmac)
 	uint32_t mck_divisor;
 	const struct gmac_dev_config *const cfg = dev->config;
 
+#ifdef CFG_PMD3_ETHMD_Msk
+	CFG_REGS->CFG_PMD3 &= ~CFG_PMD3_ETHMD_Msk;
+#endif
+#ifdef GMAC_CTRLA_ENABLE_Msk
+	gmac->GMAC_CTRLA = GMAC_CTRLA_ENABLE_Msk;
+	while (gmac->GMAC_SYNCB != 0U) {}
+#endif
+
 	gmac->GMAC_NCFGR |= GMAC_NCFGR_MTIHEN_Msk | GMAC_NCFGR_LFERD_Msk | GMAC_NCFGR_RFCS_Msk |
 #ifdef CONFIG_NET_VLAN
 			    GMAC_NCFGR_MAXFS_Msk |
@@ -428,7 +446,8 @@ static int gmac_init(const struct device *dev, gmac_registers_t *gmac)
 
 	gmac->GMAC_NCR = GMAC_NCR_CLRSTAT_Msk | GMAC_NCR_MPE_Msk;
 	gmac->GMAC_IDR = UINT32_MAX;
-	(void)gmac->GMAC_ISR;
+	gmac->GMAC_ISR = gmac->GMAC_ISR;
+	gmac->GMAC_TSR = gmac->GMAC_TSR;
 	gmac->GMAC_HRB = UINT32_MAX;
 	gmac->GMAC_HRT = UINT32_MAX;
 	gmac->GMAC_RSR = GMAC_RSR_RESETVALUE;
@@ -785,6 +804,7 @@ static void eth_mchp_queue0_isr(const struct device *dev)
 	uint32_t isr = gmac_regs->GMAC_ISR;
 
 	LOG_DBG("GMAC_ISR=0x%08x", isr);
+	gmac_regs->GMAC_ISR = isr;
 
 	if (isr & GMAC_ISR_RCOMP_Msk) {
 		tail_desc = &rx_desc_list->buf_desc[rx_desc_list->tail];
@@ -817,6 +837,34 @@ static void eth_mchp_queue0_isr(const struct device *dev)
  */
 PINCTRL_DT_INST_DEFINE(0);
 
+/*
+ * BZ6 has a dedicated 50 MHz Ethernet PLL (EPLL) that supplies the RMII/MII
+ * reference clock domain used internally by the ETH block. Without it,
+ * CTRLA.ENABLE's SYNCB.ENABLE handshake never completes, since the ETH
+ * block's internal clock request can never be satisfied. This mirrors the
+ * vendor Harmony reference driver's CLOCK_Initialize() EPLL setup; it isn't
+ * modeled as a clock_control subsystem since it's specific to this one
+ * peripheral.
+ */
+static void eth_mchp_epll_enable(void)
+{
+#if defined(CONFIG_SOC_SERIES_PIC32CX_BZ62)
+	/* Unlock system for clock configuration (required for CRU_ */
+	/* and CFG_CFGCON0 writes below to take effect). */
+	CFG_REGS->CFG_SYSKEY = 0x00000000U;
+	CFG_REGS->CFG_SYSKEY = 0xAA996655U;
+	CFG_REGS->CFG_SYSKEY = 0x556699AAU;
+	CRU_REGS->CRU_UPLLCON = CRU_UPLLCON_UPLLPWDN_Msk;
+	CRU_REGS->CRU_EPLLCON = CRU_EPLLCON_EPLLBSWSEL(2) | CRU_EPLLCON_EPLLPOSTDIV1(24)
+			      | CRU_EPLLCON_EPLLFBDIV(75) | CRU_EPLLCON_EPLLREFDIV(1)
+			      | CRU_EPLLCON_ECLKOUTEN_Enable;
+	CRU_REGS->CRU_APLLCON = 16U;
+	CFG_REGS->CFG_CFGCON0SET = CFG_CFGCON0_EPLLHWMD_Msk;
+	/* Re-lock system after clock configuration. */
+	CFG_REGS->CFG_SYSKEY = 0x33333333U;
+#endif
+}
+
 static int eth_mchp_initialize(const struct device *dev)
 {
 	const struct gmac_dev_config *const cfg = dev->config;
@@ -824,7 +872,7 @@ static int eth_mchp_initialize(const struct device *dev)
 	gmac_registers_t *const gmac_regs = cfg->regs;
 	int retval;
 
-	cfg->config_func();
+	eth_mchp_epll_enable();
 
 	retval = clock_control_on(DEVICE_DT_GET(DT_NODELABEL(clock)), cfg->mclk_apb_sys);
 	if ((retval != 0) && (retval != -EALREADY)) {
@@ -862,6 +910,15 @@ static int eth_mchp_initialize(const struct device *dev)
 
 		return retval;
 	}
+
+	/* Connect and enable the IRQ only after the peripheral clocks are
+	 * running and gmac_init() has configured GMAC_IER and flushed any
+	 * stale GMAC_ISR/GMAC_RSR/GMAC_TSR state. Enabling the IRQ earlier
+	 * (while GMAC is unclocked/unconfigured) leaves its interrupt line
+	 * in an undefined state, which latches into the NVIC and causes an
+	 * interrupt storm that never resolves.
+	 */
+	cfg->config_func();
 
 	return retval;
 }
