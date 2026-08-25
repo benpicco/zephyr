@@ -100,3 +100,27 @@
 	pinctrl-0 = <&sercom0_uart_default>;
 	pinctrl-names = "default";
 };
+
+&gmac {
+	status = "okay";
+	pinctrl-0 = <&gmac_rmii_default>;
+	pinctrl-names = "default";
+	phy-handle = <&phy>;
+	zephyr,random-mac-address;
+};
+
+&mdio {
+	status = "okay";
+	pinctrl-0 = <&mdio_default>;
+	pinctrl-names = "default";
+
+	/* An external RMII PHY is expected to be connected via the
+	 * RMII headers (J906-J909); the PHY address depends on the
+	 * attached module.
+	 */
+	phy: ethernet-phy@0 {
+		compatible = "ethernet-phy";
+		reg = <0>;
+		status = "okay";
+	};
+};

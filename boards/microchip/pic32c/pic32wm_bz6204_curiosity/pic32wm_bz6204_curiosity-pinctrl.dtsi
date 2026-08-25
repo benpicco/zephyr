@@ -6,11 +6,59 @@
 
 #include <dt-bindings/pic32c/pic32cx_bz/bz62/pic32cx2051bz62132-pinctrl.h>
 
+/*
+ * The GMAC/RMII signals are non-remappable (fixed-function) pins: they are
+ * always available on their default pad once the peripheral is enabled, and
+ * are not routed through the PPS crossbar. There is therefore no <sig>R
+ * register to program; the "gpio" pinmux function is used here only to
+ * configure the digital input buffer (ANSEL/TRIS), letting the GMAC
+ * peripheral take priority on the pin once enabled.
+ */
+#define PA13_GMAC_GRX1 MCHP_PINMUX(a, 13, NA, NA, gpio)
+#define PA14_GMAC_GRX0 MCHP_PINMUX(a, 14, NA, NA, gpio)
+#define PC0_GMAC_GTX0        MCHP_PINMUX(c, 0, NA, NA, gpio)
+#define PC1_GMAC_GREFCLKOUT  MCHP_PINMUX(c, 1, NA, NA, gpio)
+#define PC8_GMAC_GRXER MCHP_PINMUX(c, 8, NA, NA, gpio)
+#define PC9_GMAC_GTXEN MCHP_PINMUX(c, 9, NA, NA, gpio)
+#define PD6_GMAC_GMDIO MCHP_PINMUX(d, 6, NA, NA, gpio)
+#define PD7_GMAC_GMDC  MCHP_PINMUX(d, 7, NA, NA, gpio)
+#define PE1_GMAC_GTX1     MCHP_PINMUX(e, 1, NA, NA, gpio)
+#define PE2_GMAC_GCRS_DV  MCHP_PINMUX(e, 2, NA, NA, gpio)
+
 &pinctrl {
 	sercom0_uart_default: sercom0_uart_default {
 		group1 {
 			pinmux = <PA5_SCOM0P0_OUT>,
 			<PA6_SCOM0P1_IN>;
+		};
+	};
+
+	gmac_rmii_default: gmac_rmii_default {
+		group1 {
+			pinmux = <PC0_GMAC_GTX0>, <PE1_GMAC_GTX1>, <PC9_GMAC_GTXEN>;
+			output-enable;
+		};
+		group2 {
+			/*
+			 * ETH_TXCK1 (GREFCLKOUT) is input-only in RMII mode: the
+			 * external PHY provides the 50 MHz reference clock.
+			 */
+			pinmux = <PA14_GMAC_GRX0>, <PA13_GMAC_GRX1>, <PC8_GMAC_GRXER>,
+				 <PE2_GMAC_GCRS_DV>, <PC1_GMAC_GREFCLKOUT>;
+			input-enable;
+		};
+	};
+
+	mdio_default: mdio_default {
+		group1 {
+			/* MDIO is bidirectional; keep the digital input path enabled. */
+			pinmux = <PD6_GMAC_GMDIO>;
+			input-enable;
+		};
+		group2 {
+			/* MDC is a unidirectional MAC-to-PHY output clock. */
+			pinmux = <PD7_GMAC_GMDC>;
+			output-enable;
 		};
 	};
 };
