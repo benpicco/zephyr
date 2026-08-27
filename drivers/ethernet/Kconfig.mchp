@@ -44,4 +44,21 @@ config ETH_MCHP_RX_THREAD_PRIORITY
 	  Ethernet Driver handles RX in thread.
 	  This options sets the priority of that thread.
 
+config ETH_MCHP_GMAC_G1_WRAPPER
+	bool "Support GMAC instances with a wrapper register block"
+	default $(dt_compat_any_has_prop,$(DT_COMPAT_MICROCHIP_GMAC_G1_ETH),microchip,gmac-has-wrapper)
+	help
+	  Enable the extra initialization sequence required by GMAC instances
+	  (e.g. PIC32CZ CA80/CA90) that expose a wrapper register block
+	  (module enable, clock request, AXI master port configuration,
+	  write-protect control) in front of the Cadence GEM core registers.
+
+config ETH_MCHP_GMAC_G1_GBIT
+	bool "Support Gigabit Ethernet link speed"
+	default $(dt_compat_any_has_prop,$(DT_COMPAT_MICROCHIP_GMAC_G1_ETH),phy-connection-type,"gmii")
+	help
+	  Enable handling of 1000 Mbps link speed (NCFGR.GIGE) and GMII PHY
+	  connection type. Only applicable to GMAC instances that support
+	  Gigabit Ethernet (e.g. PIC32CZ CA80/CA90).
+
 endif # ETH_MCHP_GMAC_G1

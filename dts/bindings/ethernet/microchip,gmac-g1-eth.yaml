@@ -35,6 +35,18 @@ properties:
   clocks:
     type: phandle-array
 
+  microchip,gmac-has-wrapper:
+    type: boolean
+    description: |
+      Some GMAC instances (e.g. PIC32CZ CA80/CA90) place the Cadence GEM
+      core registers behind an additional wrapper register block (clock
+      request/enable, AXI master port configuration, write-protect
+      control) starting at offset 0x0, with the GEM core itself appearing
+      at a fixed offset within the peripheral's register space. Set this
+      property when such a wrapper is present so the driver performs the
+      extra wrapper enable/clock-request sequence before touching the
+      core GMAC registers.
+
 examples:
   - |
     &gmac {

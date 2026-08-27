@@ -20,6 +20,7 @@ LOG_MODULE_REGISTER(eth_mchp_gmac_g1, CONFIG_ETHERNET_LOG_LEVEL);
 
 #define GMAC_PHY_CONN_TYPE_MII  0
 #define GMAC_PHY_CONN_TYPE_RMII 1
+#define GMAC_PHY_CONN_TYPE_GMII 2
 
 #if (DT_INST_ENUM_IDX(0, phy_connection_type) == GMAC_PHY_CONN_TYPE_MII)
 #define GMAC_PHY_CONN_TYPE_MII_ENABLED
@@ -27,6 +28,58 @@ LOG_MODULE_REGISTER(eth_mchp_gmac_g1, CONFIG_ETHERNET_LOG_LEVEL);
 
 #if (DT_INST_ENUM_IDX(0, phy_connection_type) == GMAC_PHY_CONN_TYPE_RMII)
 #define GMAC_PHY_CONN_TYPE_RMII_ENABLED
+#endif
+
+#if (DT_INST_ENUM_IDX(0, phy_connection_type) == GMAC_PHY_CONN_TYPE_GMII)
+#define GMAC_PHY_CONN_TYPE_GMII_ENABLED
+#endif
+
+/*
+ * Instances such as PIC32CZ CA80/CA90 expose the Cadence GEM core behind an
+ * additional wrapper register block (module enable, clock request, AXI
+ * master port configuration, write-protect control). CONFIG_ETH_MCHP_GMAC_G1_
+ * WRAPPER/GBIT are auto-selected from the "microchip,gmac-has-wrapper"
+ * DT property and "gmii" phy-connection-type respectively -- see
+ * drivers/ethernet/Kconfig.mchp.
+ */
+#if defined(CONFIG_ETH_MCHP_GMAC_G1_WRAPPER)
+/* TODO: replace with the generated PIC32CZ CA80/CA90 pack header type once
+ * available (modules/hal/microchip/packs/pic32c/pic32cz_ca/pic32cz_ca80|ca90).
+ * Layout below mirrors the wrapper register block documented in the
+ * PIC32CZ-CA80-CA90 Family Data Sheet (DS60001749), GMAC/ETH chapter,
+ * offsets 0x00-0xFFF preceding the core GMAC registers at offset 0x1000.
+ */
+struct gmac_wrapper_registers {
+	uint32_t CTRLA;   /* 0x00 */
+	uint32_t CTRLB;   /* 0x04 */
+	uint32_t RESERVED0[1];
+	uint32_t EVCTRL;  /* 0x0C */
+	uint32_t RESERVED1[4];
+	uint32_t SYNCBUSY; /* 0x20 */
+	uint32_t RESERVED2[3];
+	uint32_t WPCTRL;  /* 0x30 */
+	uint32_t RESERVED3[6];
+	uint32_t EFIEN;   /* 0x4C */
+	uint32_t AXIMP;   /* 0x54 */
+};
+
+#define GMAC_WRAPPER_CTRLB_GMIIEN_Msk      BIT(0)
+#define GMAC_WRAPPER_CTRLB_GBITCLKREQ_Msk  BIT(1)
+#define GMAC_WRAPPER_CTRLB_TSUCLKREQ_Msk   BIT(2)
+#define GMAC_WRAPPER_CTRLA_ENABLE_Msk      BIT(0)
+#define GMAC_WRAPPER_SYNCBUSY_ENABLE_Msk   BIT(0)
+
+/* Core GMAC registers start at this fixed offset within the peripheral for
+ * instances that have the wrapper block (see gmac_wrapper_registers above).
+ */
+#define GMAC_CORE_REG_OFFSET 0x1000u
+#endif /* CONFIG_ETH_MCHP_GMAC_G1_WRAPPER */
+
+#if defined(CONFIG_ETH_MCHP_GMAC_G1_GBIT) && !defined(GMAC_NCFGR_GIGE_Msk)
+/* TODO: remove once the generated PIC32CZ CA80/CA90 pack header defines this
+ * (NCFGR bit 10, "Gigabit Mode Enable" per DS60001749 32.8.6).
+ */
+#define GMAC_NCFGR_GIGE_Msk BIT(10)
 #endif
 
 #define GMAC_MTU            NET_ETH_MTU
@@ -379,14 +432,44 @@ static void gmac_rx_error_handler(gmac_registers_t *gmac, struct gmac_queue *que
 
 static int gmac_set_phy_connection_type(gmac_registers_t *gmac)
 {
-#ifdef GMAC_PHY_CONN_TYPE_MII_ENABLED
+#if defined(GMAC_PHY_CONN_TYPE_MII_ENABLED) || defined(GMAC_PHY_CONN_TYPE_GMII_ENABLED)
 	gmac->GMAC_UR = 0x1;
 #elif defined(GMAC_PHY_CONN_TYPE_RMII_ENABLED)
 	gmac->GMAC_UR = 0x0;
-#endif /* GMAC_PHY_CONN_TYPE_MII_ENABLED */
+#endif /* GMAC_PHY_CONN_TYPE_MII_ENABLED || GMAC_PHY_CONN_TYPE_GMII_ENABLED */
 
 	return 0;
 }
+
+#if defined(CONFIG_ETH_MCHP_GMAC_G1_WRAPPER)
+/*
+ * Bring up the wrapper block found in front of the Cadence GEM core on GMAC
+ * instances such as PIC32CZ CA80/CA90: request the TX/TSU clocks, select
+ * GMII vs MII/RMII, then enable the module and wait for synchronization.
+ * Must run before any access to the core GMAC registers.
+ */
+static int gmac_wrapper_init(struct gmac_wrapper_registers *wrapper)
+{
+	uint32_t ctrlb = 0;
+
+#if defined(GMAC_PHY_CONN_TYPE_GMII_ENABLED)
+	ctrlb |= GMAC_WRAPPER_CTRLB_GMIIEN_Msk | GMAC_WRAPPER_CTRLB_GBITCLKREQ_Msk;
+#endif
+#if defined(CONFIG_PTP_CLOCK_MCHP_GMAC_G1) || defined(CONFIG_NET_GPTP)
+	ctrlb |= GMAC_WRAPPER_CTRLB_TSUCLKREQ_Msk;
+#endif
+	wrapper->CTRLB = ctrlb;
+
+	wrapper->CTRLA |= GMAC_WRAPPER_CTRLA_ENABLE_Msk;
+
+	/* Wait for the module enable to synchronize. */
+	while (wrapper->SYNCBUSY & GMAC_WRAPPER_SYNCBUSY_ENABLE_Msk) {
+		;
+	}
+
+	return 0;
+}
+#endif /* CONFIG_ETH_MCHP_GMAC_G1_WRAPPER */
 
 static inline int gmac_get_mck_clock_divisor(uint32_t mck, uint32_t *mck_divisor)
 {
@@ -419,6 +502,14 @@ static int gmac_init(const struct device *dev, gmac_registers_t *gmac)
 	uint32_t clk_freq_hz = 0;
 	uint32_t mck_divisor;
 	const struct gmac_dev_config *const cfg = dev->config;
+
+#if defined(CONFIG_ETH_MCHP_GMAC_G1_WRAPPER)
+	retval = gmac_wrapper_init((struct gmac_wrapper_registers *)((uintptr_t)gmac -
+								      GMAC_CORE_REG_OFFSET));
+	if (retval < 0) {
+		return retval;
+	}
+#endif /* CONFIG_ETH_MCHP_GMAC_G1_WRAPPER */
 
 	gmac->GMAC_NCFGR |= GMAC_NCFGR_MTIHEN_Msk | GMAC_NCFGR_LFERD_Msk | GMAC_NCFGR_RFCS_Msk |
 #ifdef CONFIG_NET_VLAN
@@ -879,8 +970,18 @@ static void eth_mchp_phy_link_state_changed(const struct device *pdev, struct ph
 		uint32_t val = gmac_regs->GMAC_NCFGR;
 
 		val &= ~(GMAC_NCFGR_FD_Msk | GMAC_NCFGR_SPD_Msk);
+#if defined(CONFIG_ETH_MCHP_GMAC_G1_GBIT)
+		val &= ~GMAC_NCFGR_GIGE_Msk;
+#endif
 		val |= PHY_LINK_IS_FULL_DUPLEX(state->speed) ? GMAC_NCFGR_FD_Msk : 0;
-		val |= PHY_LINK_IS_SPEED_100M(state->speed) ? GMAC_NCFGR_SPD_Msk : 0;
+#if defined(CONFIG_ETH_MCHP_GMAC_G1_GBIT)
+		if (PHY_LINK_IS_SPEED_1000M(state->speed)) {
+			val |= GMAC_NCFGR_GIGE_Msk;
+		} else
+#endif
+		{
+			val |= PHY_LINK_IS_SPEED_100M(state->speed) ? GMAC_NCFGR_SPD_Msk : 0;
+		}
 		gmac_regs->GMAC_NCFGR = val;
 		gmac_regs->GMAC_NCR |= (GMAC_NCR_RXEN_Msk | GMAC_NCR_TXEN_Msk);
 	}
