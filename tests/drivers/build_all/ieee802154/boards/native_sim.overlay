@@ -93,6 +93,9 @@
 				radio@0 {
 					reg = <0>;
 					local-mac-address = [00 04 25 ff ff 00 00 01];
+					phy = "mr-oqpsk";
+					sun-band = <868>;
+					rate-mode = <2>;
 				};
 
 				radio@1 {
