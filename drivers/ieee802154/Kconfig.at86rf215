@@ -40,10 +40,19 @@ config IEEE802154_AT86RF215_CCA_THRESHOLD
 	range -127 4
 	help
 	  The channel is considered busy if the energy measured during clear
-	  channel assessment exceeds this threshold. IEEE 802.15.4 requires
+	  channel assessment exceeds this threshold (legacy O-QPSK PHY). IEEE 802.15.4 requires
 	  the threshold to be at most 10 dB above the receiver sensitivity
 	  of the PHY (-85 dBm for O-QPSK), which is also the reset value of
 	  the transceiver.
+
+config IEEE802154_AT86RF215_SUN_CCA_THRESHOLD
+	int "CCA energy detection threshold for MR-O-QPSK [dBm]"
+	default -90
+	range -127 4
+	help
+	  CCA energy detection threshold of radios that use the SUN O-QPSK
+	  (MR-O-QPSK) PHY. IEEE 802.15.4 requires the threshold to be at
+	  most -90 dBm for this PHY.
 
 config IEEE802154_AT86RF215_INIT_PRIO
 	int "AT86RF215 initialization priority"

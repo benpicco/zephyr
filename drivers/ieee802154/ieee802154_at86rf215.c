@@ -4,9 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Driver for the Microchip (Atmel) AT86RF215 dual-band IEEE 802.15.4
- * transceiver. Only the legacy O-QPSK PHY (250 kb/s) is supported:
- *  - 2.4 GHz radio: channel page 0, channels 11-26 (2000 kchip/s)
- *  - sub-GHz radio: channel page 2, channels 1-10 (915 MHz band, 1000 kchip/s)
+ * transceiver. Each radio uses one of the following PHYs:
+ *  - legacy O-QPSK (250 kb/s):
+ *    - 2.4 GHz radio: channel page 0, channels 11-26 (2000 kchip/s)
+ *    - sub-GHz radio: channel page 2, channels 1-10 (915 MHz band, 1000 kchip/s)
+ *  - SUN O-QPSK (MR-O-QPSK): channel page 9, band, chip rate and rate mode
+ *    selected in devicetree
  */
 
 #define DT_DRV_COMPAT atmel_at86rf215
@@ -35,18 +38,43 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #include "ieee802154_at86rf215.h"
 #include "ieee802154_at86rf215_regs.h"
 
-/* IEEE 802.15.4 O-QPSK PHY symbol duration (both 2450 MHz and 915 MHz band) */
-#define AT86RF215_SYMBOL_TIME_US   16U
-/* macAckWaitDuration: aUnitBackoffPeriod + aTurnaroundTime + phySHRDuration + 6 * 2 */
-#define AT86RF215_ACK_WAIT_SYMBOLS 54U
-#define AT86RF215_ACK_TIMEOUT_US   (AT86RF215_ACK_WAIT_SYMBOLS * AT86RF215_SYMBOL_TIME_US)
-/* Upper bound for the transmission of an automatic ACK frame after RXFE */
-#define AT86RF215_AACK_TIMEOUT_US  2000U
-/* aUnitBackoffPeriod: 20 symbols */
-#define AT86RF215_UNIT_BACKOFF_US  (20U * AT86RF215_SYMBOL_TIME_US)
-/* Upper bound for CSMA-CA, retransmissions and ACK reception of a frame */
-#define AT86RF215_TX_TIMEOUT       K_MSEC(500)
-#define AT86RF215_CCA_TIMEOUT      K_MSEC(10)
+/* Legacy O-QPSK PHY, see IEEE 802.15.4-2024 clause 13 */
+#define AT86RF215_LEGACY_SYMBOL_US          16U
+/* Preamble (8 symbols) and SFD (2 symbols) */
+#define AT86RF215_LEGACY_SHR_SYMBOLS        10U
+#define AT86RF215_LEGACY_SYMBOLS_PER_OCTET  2U
+/* aTurnaroundTime, equal to macSifsPeriod */
+#define AT86RF215_LEGACY_TURNAROUND_SYMBOLS 12U
+#define AT86RF215_LEGACY_CCA_SYMBOLS        8U
+
+/*
+ * SUN O-QPSK PHY, see IEEE 802.15.4-2024 clause 22. The symbol period is
+ * the bit period of the SHR, (32,1)-DSSS at 100 kchip/s, (64,1)-DSSS at
+ * 1000 kchip/s and (128,1)-DSSS at 2000 kchip/s. The proprietary
+ * 200 kchip/s mode of the AT86RF215 is the 100 kchip/s PHY at twice the
+ * chip rate.
+ */
+#define AT86RF215_MR_SYMBOL_US_100   320U
+#define AT86RF215_MR_SYMBOL_US       64U
+/* phyCcaDuration (table 22-24) */
+#define AT86RF215_MR_CCA_SYMBOLS_100 4U
+#define AT86RF215_MR_CCA_SYMBOLS     8U
+#define AT86RF215_MR_SFD_SYMBOLS     16U
+/* 60 interleaved PHR code bits, (N,1)-DSSS with N = SHR spreading factor / 4 */
+#define AT86RF215_MR_PHR_SYMBOLS     15U
+/* Number of PSDU information bits per interleaver block (N_INTRLV / 2) */
+#define AT86RF215_MR_BITS_PER_BLOCK  63U
+/* Termination bits appended to the PSDU before encoding */
+#define AT86RF215_MR_TAIL_BITS       6U
+/* AIFS of the SUN PHYs, aTurnaroundTime is 1 ms rounded up to full symbols */
+#define AT86RF215_MR_AIFS_US         1000U
+#define AT86RF215_MR_TURNAROUND_US   1000U
+
+/* Upper bound for the transmission of an automatic ACK frame after its start */
+#define AT86RF215_AACK_MARGIN_US       1500U
+/* Margin for the frame transmission watchdog */
+#define AT86RF215_TX_TIMEOUT_MARGIN_MS 500U
+#define AT86RF215_CCA_TIMEOUT          K_MSEC(10)
 
 /* t_RST: minimum reset pulse width */
 #define AT86RF215_RESET_PULSE_US    16U
@@ -71,6 +99,77 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #define AT86RF215_SUBGHZ_CHANNEL_MIN 1U
 #define AT86RF215_SUBGHZ_CHANNEL_MAX 10U
 #define AT86RF215_SUBGHZ_CHANNEL_DEF 1U
+
+/* Channel plan of the SUN O-QPSK PHY, see IEEE 802.15.4-2024 table 11-14 */
+struct at86rf215_sun_channels {
+	/* band designation (MHz) */
+	uint16_t band;
+	/* kchip/s */
+	uint16_t chip_rate;
+	uint32_t center0_khz;
+	/* 0: center frequencies of table 11-16 */
+	uint16_t spacing_khz;
+	uint16_t num_channels;
+};
+
+static const struct at86rf215_sun_channels at86rf215_sun_channels[] = {
+	{470, 100, 470200, 200, 199}, {780, 100, 779200, 200, 39},     {780, 1000, 780000, 2000, 4},
+	{866, 100, 865100, 200, 15},  {868, 100, 868300, 0, 3},        {870, 100, 870200, 200, 29},
+	{915, 100, 902200, 200, 129}, {915, 1000, 904000, 2000, 12},   {917, 100, 917100, 200, 32},
+	{917, 1000, 918100, 2000, 3}, {2450, 2000, 2405000, 5000, 16},
+};
+
+/* Center frequencies of the SUN O-QPSK PHY in the 868-870 MHz band (table 11-16) */
+static const uint32_t at86rf215_sun_868_khz[] = {868300, 868950, 869525};
+
+/* Front end configuration for O-QPSK, see datasheet tables 6-103, 6-105 and 6-106 */
+struct at86rf215_oqpsk_fe {
+	uint8_t paramp;
+	uint8_t lpfcut;
+	uint8_t tx_rcut;
+	uint8_t rx_bw;
+	uint8_t rx_rcut;
+	uint8_t sr;
+	uint8_t avgs;
+	/* EDD.DF with EDD.DTB = 128 us, equals phyCcaDuration of the SUN O-QPSK PHY */
+	uint8_t edd_df;
+};
+
+/* Indexed by OQPSKC0.FCHIP: 100, 200, 1000 and 2000 kchip/s */
+static const struct at86rf215_oqpsk_fe at86rf215_oqpsk_fe[] = {
+	{.paramp = 3,
+	 .lpfcut = 7,
+	 .tx_rcut = 3,
+	 .rx_bw = 0x0,
+	 .rx_rcut = 1,
+	 .sr = 0xA,
+	 .avgs = 2,
+	 .edd_df = 10},
+	{.paramp = 2,
+	 .lpfcut = 7,
+	 .tx_rcut = 3,
+	 .rx_bw = 0x2,
+	 .rx_rcut = 1,
+	 .sr = 0x5,
+	 .avgs = 2,
+	 .edd_df = 5},
+	{.paramp = 0,
+	 .lpfcut = 0xB,
+	 .tx_rcut = 3,
+	 .rx_bw = 0x8,
+	 .rx_rcut = 0,
+	 .sr = 0x1,
+	 .avgs = 0,
+	 .edd_df = 4},
+	{.paramp = 0,
+	 .lpfcut = 0xB,
+	 .tx_rcut = 4,
+	 .rx_bw = 0xB,
+	 .rx_rcut = 2,
+	 .sr = 0x1,
+	 .avgs = 0,
+	 .edd_df = 4},
+};
 
 #define AT86RF215_FREQ_RES_KHZ 25U
 
@@ -323,7 +422,7 @@ static void at86rf215_csma_backoff(struct at86rf215_radio *r)
 	}
 
 	atomic_clear_bit(&r->timeout, AT86RF215_TIMEOUT_BACKOFF);
-	k_timer_start(&r->backoff_timer, K_USEC(periods * AT86RF215_UNIT_BACKOFF_US), K_NO_WAIT);
+	k_timer_start(&r->backoff_timer, K_USEC(periods * r->unit_backoff_us), K_NO_WAIT);
 }
 
 /* Unslotted CSMA-CA, see IEEE 802.15.4-2020 section 6.2.5.1 */
@@ -398,7 +497,7 @@ static void at86rf215_handle_cca(struct at86rf215_radio *r)
 	rf_write(r, AT86RF215_RF_EDC, AT86RF215_EDC_EDM_AUTO);
 	bbc_write(r, AT86RF215_BBC_PC, r->pc);
 
-	r->cca_result = ed > CONFIG_IEEE802154_AT86RF215_CCA_THRESHOLD ? -EBUSY : 0;
+	r->cca_result = ed > r->cca_threshold ? -EBUSY : 0;
 	LOG_DBG("CCA: %d dBm (%s)", ed, r->cca_result ? "busy" : "clear");
 
 	k_sem_give(&r->cca_sem);
@@ -553,7 +652,7 @@ static void at86rf215_isr(struct at86rf215_radio *r, uint8_t rf_irq, uint8_t bb_
 		if (r->ack_requested) {
 			bbc_write(r, AT86RF215_BBC_AFFTM, AT86RF215_AFFTM_ACK);
 			r->state = AT86RF215_TRX_TX_WAIT_ACK;
-			at86rf215_start_timer(r, AT86RF215_ACK_TIMEOUT_US);
+			at86rf215_start_timer(r, r->ack_timeout_us);
 		} else {
 			at86rf215_tx_end(r, 0);
 		}
@@ -564,7 +663,7 @@ static void at86rf215_isr(struct at86rf215_radio *r, uint8_t rf_irq, uint8_t bb_
 		case AT86RF215_TRX_IDLE:
 			if (at86rf215_rx(r)) {
 				r->state = AT86RF215_TRX_RX_SEND_ACK;
-				at86rf215_start_timer(r, AT86RF215_AACK_TIMEOUT_US);
+				at86rf215_start_timer(r, r->aack_timeout_us);
 			} else {
 				at86rf215_set_idle(r);
 			}
@@ -598,7 +697,7 @@ static void at86rf215_isr(struct at86rf215_radio *r, uint8_t rf_irq, uint8_t bb_
 		case AT86RF215_TRX_TX_WAIT_ACK:
 			if (r->agc_hold) {
 				/* a frame (likely the ACK) is still being received */
-				at86rf215_start_timer(r, AT86RF215_ACK_TIMEOUT_US);
+				at86rf215_start_timer(r, r->ack_timeout_us);
 			} else if (r->retries > 0) {
 				r->retries--;
 				r->tx_pending = true;
@@ -712,63 +811,83 @@ static void at86rf215_backoff_handler(struct k_timer *timer)
 static void at86rf215_write_channel(struct at86rf215_radio *r, uint16_t channel)
 {
 	uint8_t regs[5];
-	uint32_t spacing, center0;
+	uint32_t center0 = r->center0_khz;
+	uint16_t cn = channel;
+
+	if (r->spacing_khz == 0) {
+		center0 = at86rf215_sun_868_khz[channel];
+		cn = 0;
+	}
 
 	if (r->idx == AT86RF215_RADIO_2_4GHZ) {
-		spacing = AT86RF215_2_4GHZ_SPACING_KHZ;
-		center0 = AT86RF215_2_4GHZ_CENTER0_KHZ - AT86RF215_RF24_CCF0_OFFSET_KHZ;
-	} else {
-		spacing = AT86RF215_SUBGHZ_SPACING_KHZ;
-		center0 = AT86RF215_SUBGHZ_CENTER0_KHZ;
+		center0 -= AT86RF215_RF24_CCF0_OFFSET_KHZ;
 	}
 
 	/* CS, CCF0L, CCF0H, CNL, CNM - writing CNM applies the new channel */
-	regs[0] = spacing / AT86RF215_FREQ_RES_KHZ;
+	regs[0] = r->spacing_khz / AT86RF215_FREQ_RES_KHZ;
 	sys_put_le16(center0 / AT86RF215_FREQ_RES_KHZ, &regs[1]);
-	regs[3] = channel & 0xff;
-	regs[4] = (channel >> 8) & AT86RF215_CNM_CNH;
+	regs[3] = cn & 0xff;
+	regs[4] = (cn >> 8) & AT86RF215_CNM_CNH;
 
 	at86rf215_write(r->chip, r->rf_base + AT86RF215_RF_CS, regs, sizeof(regs));
 	r->channel = channel;
 }
 
-static void at86rf215_configure_legacy_oqpsk(struct at86rf215_radio *r)
+/* Configure the legacy O-QPSK or the MR-O-QPSK PHY */
+static void at86rf215_configure_oqpsk(struct at86rf215_radio *r)
 {
-	bool is_2_4ghz = r->idx == AT86RF215_RADIO_2_4GHZ;
+	const struct at86rf215_oqpsk_fe *fe = &at86rf215_oqpsk_fe[r->fchip];
+	bool mr = r->cfg->sun_band != 0;
+	/* direct modulation shall be used for 100 kchip/s on v.3 devices */
+	bool dm = r->fchip == AT86RF215_OQPSKC0_FCHIP_100 && r->chip->vn == 3;
+	uint8_t edd;
 
 	/* baseband must be disabled while it is reconfigured */
 	bbc_write(r, AT86RF215_BBC_PC, 0);
 
 	/* transmitter frontend, see datasheet table 6-103 */
 	rf_write(r, AT86RF215_RF_TXCUTC,
-		 FIELD_PREP(AT86RF215_TXCUTC_PARAMP_MASK, 0) |
-			 FIELD_PREP(AT86RF215_TXCUTC_LPFCUT_MASK, 0xB));
+		 FIELD_PREP(AT86RF215_TXCUTC_PARAMP_MASK, fe->paramp) |
+			 FIELD_PREP(AT86RF215_TXCUTC_LPFCUT_MASK, fe->lpfcut));
 	rf_write(r, AT86RF215_RF_TXDFE,
-		 FIELD_PREP(AT86RF215_TXDFE_RCUT_MASK, is_2_4ghz ? 4 : 3) |
-			 FIELD_PREP(AT86RF215_TXDFE_SR_MASK, 1));
+		 FIELD_PREP(AT86RF215_TXDFE_RCUT_MASK, fe->tx_rcut) |
+			 FIELD_PREP(AT86RF215_TXDFE_SR_MASK, fe->sr) |
+			 (dm ? AT86RF215_TXDFE_DM : 0));
 
 	/* receiver frontend, see datasheet tables 6-105 and 6-106 */
-	rf_write(r, AT86RF215_RF_RXBWC, FIELD_PREP(AT86RF215_RXBWC_BW_MASK, is_2_4ghz ? 0xB : 0x8));
+	rf_write(r, AT86RF215_RF_RXBWC, FIELD_PREP(AT86RF215_RXBWC_BW_MASK, fe->rx_bw));
 	rf_write(r, AT86RF215_RF_RXDFE,
-		 FIELD_PREP(AT86RF215_RXDFE_RCUT_MASK, is_2_4ghz ? 2 : 0) |
-			 FIELD_PREP(AT86RF215_RXDFE_SR_MASK, 1));
-	rf_write(r, AT86RF215_RF_AGCC, AT86RF215_AGCC_EN | FIELD_PREP(AT86RF215_AGCC_AVGS_MASK, 0));
+		 FIELD_PREP(AT86RF215_RXDFE_RCUT_MASK, fe->rx_rcut) |
+			 FIELD_PREP(AT86RF215_RXDFE_SR_MASK, fe->sr));
+	rf_write(r, AT86RF215_RF_AGCC,
+		 AT86RF215_AGCC_EN | FIELD_PREP(AT86RF215_AGCC_AVGS_MASK, fe->avgs));
 	rf_write(r, AT86RF215_RF_AGCS, FIELD_PREP(AT86RF215_AGCS_TGT_MASK, 3));
 
-	/* energy detection over 8 symbols (128 us), the CCA duration of the O-QPSK PHY */
-	rf_write(r, AT86RF215_RF_EDD,
-		 FIELD_PREP(AT86RF215_EDD_DF_MASK, 4) |
-			 FIELD_PREP(AT86RF215_EDD_DTB_MASK, AT86RF215_EDD_DTB_32US));
+	/* energy detection over phyCcaDuration */
+	if (mr) {
+		edd = FIELD_PREP(AT86RF215_EDD_DF_MASK, fe->edd_df) |
+		      FIELD_PREP(AT86RF215_EDD_DTB_MASK, AT86RF215_EDD_DTB_128US);
+	} else {
+		/* 8 symbols (128 us) */
+		edd = FIELD_PREP(AT86RF215_EDD_DF_MASK, 4) |
+		      FIELD_PREP(AT86RF215_EDD_DTB_MASK, AT86RF215_EDD_DTB_32US);
+	}
+	rf_write(r, AT86RF215_RF_EDD, edd);
 	rf_write(r, AT86RF215_RF_EDC, AT86RF215_EDC_EDM_AUTO);
 
-	/* legacy O-QPSK, 250 kb/s */
 	bbc_write(r, AT86RF215_BBC_OQPSKC0,
-		  is_2_4ghz ? AT86RF215_OQPSKC0_FCHIP_2000 : AT86RF215_OQPSKC0_FCHIP_1000);
+		  FIELD_PREP(AT86RF215_OQPSKC0_FCHIP_MASK, r->fchip) |
+			  (dm ? AT86RF215_OQPSKC0_DM : 0));
+	/* only receive the configured PHY, proprietary rate modes disabled */
 	bbc_write(r, AT86RF215_BBC_OQPSKC2,
-		  FIELD_PREP(AT86RF215_OQPSKC2_RXM_MASK, AT86RF215_OQPSKC2_RXM_LEGACY) |
+		  FIELD_PREP(AT86RF215_OQPSKC2_RXM_MASK,
+			     mr ? AT86RF215_OQPSKC2_RXM_MR : AT86RF215_OQPSKC2_RXM_LEGACY) |
 			  AT86RF215_OQPSKC2_FCSTLEG);
+	/* PPDU type 2 is not used: only search for SFD 0 */
 	bbc_write(r, AT86RF215_BBC_OQPSKC3, 0);
-	bbc_write(r, AT86RF215_BBC_OQPSKPHRTX, AT86RF215_OQPSKPHR_LEG);
+	bbc_write(r, AT86RF215_BBC_OQPSKPHRTX,
+		  mr ? FIELD_PREP(AT86RF215_OQPSKPHR_MOD_MASK, r->cfg->rate_mode)
+		     : AT86RF215_OQPSKPHR_LEG);
 
 	/* enable baseband with 16 bit FCS, automatic FCS generation and filter */
 	r->pc = FIELD_PREP(AT86RF215_PC_PT_MASK, AT86RF215_PC_PT_MROQPSK) | AT86RF215_PC_BBEN |
@@ -778,6 +897,8 @@ static void at86rf215_configure_legacy_oqpsk(struct at86rf215_radio *r)
 
 static int at86rf215_radio_setup(struct at86rf215_radio *r)
 {
+	uint8_t aifs[2];
+	uint16_t channel;
 	int ret;
 
 	rf_cmd(r, AT86RF215_CMD_TRXOFF);
@@ -792,7 +913,7 @@ static int at86rf215_radio_setup(struct at86rf215_radio *r)
 		  AT86RF215_BB_IRQ_RXFE | AT86RF215_BB_IRQ_TXFE | AT86RF215_BB_IRQ_AGCH |
 			  AT86RF215_BB_IRQ_AGCR);
 
-	at86rf215_configure_legacy_oqpsk(r);
+	at86rf215_configure_oqpsk(r);
 
 	/* maximum output power */
 	rf_write(r, AT86RF215_RF_PAC,
@@ -804,12 +925,158 @@ static int at86rf215_radio_setup(struct at86rf215_radio *r)
 	bbc_write(r, AT86RF215_BBC_AFC1, 0);
 	bbc_write(r, AT86RF215_BBC_AFFTM, AT86RF215_AFFTM_DEFAULT);
 	bbc_write(r, AT86RF215_BBC_AMAACKPD, 0);
-	bbc_write(r, AT86RF215_BBC_AMEDT, (uint8_t)CONFIG_IEEE802154_AT86RF215_CCA_THRESHOLD);
+	sys_put_le16(r->aifs_us, aifs);
+	at86rf215_write(r->chip, r->bbc_base + AT86RF215_BBC_AMAACKTL, aifs, sizeof(aifs));
+	bbc_write(r, AT86RF215_BBC_AMEDT, (uint8_t)r->cca_threshold);
 	r->amcs = AT86RF215_AMCS_AACK | AT86RF215_AMCS_AACKFA | AT86RF215_AMCS_AACKDR;
 	bbc_write(r, AT86RF215_BBC_AMCS, r->amcs);
 
-	at86rf215_write_channel(r, r->idx == AT86RF215_RADIO_2_4GHZ ? AT86RF215_2_4GHZ_CHANNEL_DEF
-								    : AT86RF215_SUBGHZ_CHANNEL_DEF);
+	if (r->cfg->sun_band == 0 && r->idx == AT86RF215_RADIO_2_4GHZ) {
+		channel = AT86RF215_2_4GHZ_CHANNEL_DEF;
+	} else if (r->cfg->sun_band == 0) {
+		channel = AT86RF215_SUBGHZ_CHANNEL_DEF;
+	} else {
+		channel = r->channel_range.from_channel;
+	}
+	at86rf215_write_channel(r, channel);
+
+	return 0;
+}
+
+/* Duration of a PPDU with a PSDU of len octets */
+static uint32_t at86rf215_ppdu_us(const struct at86rf215_radio *r, uint32_t symbol_us, uint16_t len)
+{
+	const struct at86rf215_radio_config *cfg = r->cfg;
+	uint32_t shr, bit_us, bits;
+
+	if (cfg->sun_band == 0) {
+		return (AT86RF215_LEGACY_SHR_SYMBOLS +
+			AT86RF215_LEGACY_SYMBOLS_PER_OCTET * (1U + len)) *
+		       symbol_us;
+	}
+
+	/* preamble length, see IEEE 802.15.4-2024 section 22.2.2.2 */
+	if (cfg->sun_band == 780 || cfg->sun_band == 915 || cfg->sun_band == 917 ||
+	    cfg->sun_band == 2450) {
+		shr = 56U + AT86RF215_MR_SFD_SYMBOLS;
+	} else {
+		shr = 32U + AT86RF215_MR_SFD_SYMBOLS;
+	}
+
+	/* PSDU bit period including rate 1/2 FEC (table 22-4) */
+	if (cfg->chip_rate <= 200) {
+		bit_us = (160U * 100U / cfg->chip_rate) >> cfg->rate_mode;
+	} else {
+		bit_us = cfg->rate_mode == 0 ? 32U : (16U >> cfg->rate_mode);
+	}
+
+	/* PSDU and termination bits padded to full interleaver blocks */
+	bits = ROUND_UP(8U * len + AT86RF215_MR_TAIL_BITS, AT86RF215_MR_BITS_PER_BLOCK);
+
+	/* pilots add 1/16 to the PSDU chips (table 22-20) */
+	return (shr + AT86RF215_MR_PHR_SYMBOLS) * symbol_us +
+	       DIV_ROUND_UP(bits * bit_us * 17U, 16U);
+}
+
+/* Select the channel plan and derive the timing of the PHY */
+static int at86rf215_phy_init(struct at86rf215_radio *r)
+{
+	const struct at86rf215_radio_config *cfg = r->cfg;
+	uint32_t symbol_us, turnaround_us, cca_us, ack_us, csma_us = 0;
+	uint8_t be = AT86RF215_CSMA_MIN_BE;
+
+	if (cfg->sun_band == 0) {
+		bool is_2_4ghz = r->idx == AT86RF215_RADIO_2_4GHZ;
+
+		r->channel_page =
+			is_2_4ghz ? IEEE802154_ATTR_PHY_CHANNEL_PAGE_ZERO_OQPSK_2450_BPSK_868_915
+				  : IEEE802154_ATTR_PHY_CHANNEL_PAGE_TWO_OQPSK_868_915;
+		r->channel_range.from_channel =
+			is_2_4ghz ? AT86RF215_2_4GHZ_CHANNEL_MIN : AT86RF215_SUBGHZ_CHANNEL_MIN;
+		r->channel_range.to_channel =
+			is_2_4ghz ? AT86RF215_2_4GHZ_CHANNEL_MAX : AT86RF215_SUBGHZ_CHANNEL_MAX;
+		r->center0_khz =
+			is_2_4ghz ? AT86RF215_2_4GHZ_CENTER0_KHZ : AT86RF215_SUBGHZ_CENTER0_KHZ;
+		r->spacing_khz =
+			is_2_4ghz ? AT86RF215_2_4GHZ_SPACING_KHZ : AT86RF215_SUBGHZ_SPACING_KHZ;
+		r->fchip = is_2_4ghz ? AT86RF215_OQPSKC0_FCHIP_2000 : AT86RF215_OQPSKC0_FCHIP_1000;
+		r->cca_threshold = CONFIG_IEEE802154_AT86RF215_CCA_THRESHOLD;
+
+		symbol_us = AT86RF215_LEGACY_SYMBOL_US;
+		turnaround_us = AT86RF215_LEGACY_TURNAROUND_SYMBOLS * symbol_us;
+		cca_us = AT86RF215_LEGACY_CCA_SYMBOLS * symbol_us;
+		r->aifs_us = turnaround_us;
+	} else {
+		const struct at86rf215_sun_channels *ch = NULL;
+
+		/*
+		 * Chip rates not defined for the band use the channel plan of the
+		 * band's first chip rate (non-standard, but supported by the chip).
+		 */
+		ARRAY_FOR_EACH_PTR(at86rf215_sun_channels, p) {
+			if (p->band != cfg->sun_band) {
+				continue;
+			}
+			if (ch == NULL || p->chip_rate == cfg->chip_rate) {
+				ch = p;
+			}
+		}
+
+		if (ch == NULL) {
+			LOG_ERR("Unsupported SUN band %u MHz", cfg->sun_band);
+			return -EINVAL;
+		}
+
+		if (ch->chip_rate != cfg->chip_rate) {
+			LOG_WRN("%u kchip/s is not standard in the %u MHz band", cfg->chip_rate,
+				cfg->sun_band);
+		}
+
+		r->channel_page = IEEE802154_ATTR_PHY_CHANNEL_PAGE_NINE_SUN_PREDEFINED;
+		r->channel_range.from_channel = 0;
+		r->channel_range.to_channel = ch->num_channels - 1;
+		r->center0_khz = ch->center0_khz;
+		r->spacing_khz = ch->spacing_khz;
+		r->cca_threshold = CONFIG_IEEE802154_AT86RF215_SUN_CCA_THRESHOLD;
+
+		if (cfg->chip_rate <= 200) {
+			r->fchip = cfg->chip_rate == 100 ? AT86RF215_OQPSKC0_FCHIP_100
+							 : AT86RF215_OQPSKC0_FCHIP_200;
+			symbol_us = AT86RF215_MR_SYMBOL_US_100 * 100U / cfg->chip_rate;
+			cca_us = AT86RF215_MR_CCA_SYMBOLS_100 * symbol_us;
+		} else {
+			r->fchip = cfg->chip_rate == 1000 ? AT86RF215_OQPSKC0_FCHIP_1000
+							  : AT86RF215_OQPSKC0_FCHIP_2000;
+			symbol_us = AT86RF215_MR_SYMBOL_US;
+			cca_us = AT86RF215_MR_CCA_SYMBOLS * symbol_us;
+		}
+
+		turnaround_us = ROUND_UP(AT86RF215_MR_TURNAROUND_US, symbol_us);
+		r->aifs_us = AT86RF215_MR_AIFS_US;
+	}
+
+	/* macUnitBackoffPeriod: aTurnaroundTime + phyCcaDuration */
+	r->unit_backoff_us = turnaround_us + cca_us;
+
+	/* macAckWaitDuration: macUnitBackoffPeriod + aTurnaroundTime + duration of the ACK */
+	ack_us = at86rf215_ppdu_us(r, symbol_us, AT86RF215_MIN_PSDU_LEN);
+	r->ack_timeout_us = r->unit_backoff_us + turnaround_us + ack_us;
+	r->aack_timeout_us = r->aifs_us + ack_us + AT86RF215_AACK_MARGIN_US;
+
+	/* worst case of CSMA-CA, frame transmission and ACK wait for all attempts */
+	for (int nb = 0; nb <= AT86RF215_CSMA_MAX_BO; nb++) {
+		csma_us += BIT_MASK(be) * r->unit_backoff_us + cca_us;
+		be = MIN(be + 1, AT86RF215_CSMA_MAX_BE);
+	}
+	r->tx_timeout_ms = DIV_ROUND_UP((CONFIG_IEEE802154_AT86RF215_TX_RETRIES + 1) *
+						(csma_us + r->ack_timeout_us +
+						 at86rf215_ppdu_us(r, symbol_us,
+								   IEEE802154_MAX_PHY_PACKET_SIZE)),
+					USEC_PER_MSEC) +
+			   AT86RF215_TX_TIMEOUT_MARGIN_MS;
+
+	LOG_DBG("Radio %u: backoff %u us, ACK wait %u us, TX timeout %u ms", r->idx,
+		r->unit_backoff_us, r->ack_timeout_us, r->tx_timeout_ms);
 
 	return 0;
 }
@@ -1145,7 +1412,7 @@ static int at86rf215_tx(const struct device *dev, enum ieee802154_tx_mode mode, 
 
 	k_mutex_unlock(&r->chip->lock);
 
-	ret = k_sem_take(&r->tx_sem, AT86RF215_TX_TIMEOUT);
+	ret = k_sem_take(&r->tx_sem, K_MSEC(r->tx_timeout_ms));
 
 	k_mutex_lock(&r->chip->lock, K_FOREVER);
 	if (ret < 0) {
@@ -1285,6 +1552,7 @@ static int at86rf215_radio_init(const struct device *dev)
 	int ret;
 
 	r->chip = chip;
+	r->cfg = cfg;
 	r->idx = cfg->idx;
 	r->rf_base = is_2_4ghz ? AT86RF215_RF24_BASE : AT86RF215_RF09_BASE;
 	r->bbc_base = is_2_4ghz ? AT86RF215_BBC1_BASE : AT86RF215_BBC0_BASE;
@@ -1298,6 +1566,11 @@ static int at86rf215_radio_init(const struct device *dev)
 	k_timer_user_data_set(&r->timer, r);
 	k_timer_init(&r->backoff_timer, at86rf215_backoff_handler, NULL);
 	k_timer_user_data_set(&r->backoff_timer, r);
+
+	ret = at86rf215_phy_init(r);
+	if (ret < 0) {
+		return ret;
+	}
 
 	ret = at86rf215_chip_init(chip);
 	if (ret < 0) {
@@ -1348,6 +1621,18 @@ static const struct ieee802154_radio_api at86rf215_radio_api = {
 
 #define AT86RF215_RADIO_IS_2_4GHZ(node_id) (DT_REG_ADDR(node_id) == AT86RF215_RADIO_2_4GHZ)
 
+#define AT86RF215_RADIO_SUN_BAND(node_id)                                                          \
+	(DT_ENUM_HAS_VALUE(node_id, phy, mr_oqpsk) ? DT_PROP_OR(node_id, sun_band, 0) : 0)
+
+#define AT86RF215_RADIO_CHIP_RATE(node_id)                                                         \
+	DT_PROP_OR(node_id, chip_rate, (AT86RF215_RADIO_SUN_BAND(node_id) == 2450 ? 2000 : 100))
+
+/*
+ * The 2450 MHz band uses 2000 kchip/s (IEEE 802.15.4-2024 table 22-2), the
+ * sub-GHz bands allow any chip rate, including ones not defined for the band.
+ */
+#define AT86RF215_SUN_CHIP_RATE_VALID(band, rate) ((band) != 2450 || (rate) == 2000)
+
 #define AT86RF215_RADIO_NAME(prefix, node_id) _CONCAT(prefix, DT_DEP_ORD(node_id))
 
 #define AT86RF215_RADIO_DEVICE(node_id)                                                            \
@@ -1369,20 +1654,18 @@ static const struct ieee802154_radio_api at86rf215_radio_api = {
 	BUILD_ASSERT(!DT_NODE_HAS_PROP(node_id, local_mac_address) ||                              \
 			     DT_PROP_LEN_OR(node_id, local_mac_address, 0) == 8,                   \
 		     "at86rf215: local-mac-address must be 8 bytes");                              \
+	BUILD_ASSERT(!DT_ENUM_HAS_VALUE(node_id, phy, mr_oqpsk) ||                                 \
+			     AT86RF215_RADIO_SUN_BAND(node_id) != 0,                               \
+		     "at86rf215: sun-band is required for the mr-oqpsk PHY");                      \
+	BUILD_ASSERT(AT86RF215_RADIO_SUN_BAND(node_id) == 0 ||                                     \
+			     (AT86RF215_RADIO_SUN_BAND(node_id) == 2450) ==                        \
+				     AT86RF215_RADIO_IS_2_4GHZ(node_id),                           \
+		     "at86rf215: sun-band 2450 requires radio@1, other bands radio@0");            \
+	BUILD_ASSERT(AT86RF215_RADIO_SUN_BAND(node_id) == 0 ||                                     \
+			     AT86RF215_SUN_CHIP_RATE_VALID(AT86RF215_RADIO_SUN_BAND(node_id),      \
+							   AT86RF215_RADIO_CHIP_RATE(node_id)),    \
+		     "at86rf215: chip-rate not supported in sun-band");                            \
 	static struct at86rf215_radio AT86RF215_RADIO_NAME(at86rf215_radio_data_, node_id) = {     \
-		.channel_page =                                                                    \
-			AT86RF215_RADIO_IS_2_4GHZ(node_id)                                         \
-				? IEEE802154_ATTR_PHY_CHANNEL_PAGE_ZERO_OQPSK_2450_BPSK_868_915    \
-				: IEEE802154_ATTR_PHY_CHANNEL_PAGE_TWO_OQPSK_868_915,              \
-		.channel_range =                                                                   \
-			{                                                                          \
-				.from_channel = AT86RF215_RADIO_IS_2_4GHZ(node_id)                 \
-							? AT86RF215_2_4GHZ_CHANNEL_MIN             \
-							: AT86RF215_SUBGHZ_CHANNEL_MIN,            \
-				.to_channel = AT86RF215_RADIO_IS_2_4GHZ(node_id)                   \
-						      ? AT86RF215_2_4GHZ_CHANNEL_MAX               \
-						      : AT86RF215_SUBGHZ_CHANNEL_MAX,              \
-			},                                                                         \
 		.channels =                                                                        \
 			{                                                                          \
 				.ranges = &AT86RF215_RADIO_NAME(at86rf215_radio_data_, node_id)    \
@@ -1394,7 +1677,10 @@ static const struct ieee802154_radio_api at86rf215_radio_api = {
 									node_id) = {               \
 		.chip = &at86rf215_chip_##inst,                                                    \
 		.mac_addr = DT_PROP_OR(node_id, local_mac_address, {0}),                           \
+		.sun_band = AT86RF215_RADIO_SUN_BAND(node_id),                                     \
+		.chip_rate = AT86RF215_RADIO_CHIP_RATE(node_id),                                   \
 		.idx = DT_REG_ADDR(node_id),                                                       \
+		.rate_mode = DT_PROP(node_id, rate_mode),                                          \
 		.has_mac = DT_NODE_HAS_PROP(node_id, local_mac_address),                           \
 	};                                                                                         \
 	AT86RF215_RADIO_DEVICE(node_id);

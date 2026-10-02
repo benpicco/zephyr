@@ -59,7 +59,13 @@ struct at86rf215_chip {
 struct at86rf215_radio_config {
 	struct at86rf215_chip *chip;
 	uint8_t mac_addr[8];
+	/* SUN band designation (MHz) of the MR-O-QPSK PHY, 0 selects legacy O-QPSK */
+	uint16_t sun_band;
+	/* MR-O-QPSK chip rate in kchip/s */
+	uint16_t chip_rate;
 	uint8_t idx;
+	/* MR-O-QPSK rate mode (0-3) */
+	uint8_t rate_mode;
 	bool has_mac;
 };
 
@@ -71,6 +77,7 @@ struct at86rf215_radio {
 
 	struct net_if *iface;
 	struct at86rf215_chip *chip;
+	const struct at86rf215_radio_config *cfg;
 
 	/* Serializes API calls that use multiple chip transactions */
 	struct k_mutex api_lock;
@@ -80,6 +87,12 @@ struct at86rf215_radio {
 
 	int tx_result;
 	int cca_result;
+	/* PHY dependent timing, see at86rf215_phy_init() */
+	uint32_t ack_timeout_us;
+	uint32_t aack_timeout_us;
+	uint32_t tx_timeout_ms;
+	/* Channel center frequency: center0 + channel * spacing */
+	uint32_t center0_khz;
 	struct ieee802154_phy_channel_range channel_range;
 	struct ieee802154_phy_supported_channels channels;
 	enum ieee802154_phy_channel_page channel_page;
@@ -89,8 +102,14 @@ struct at86rf215_radio {
 	uint16_t fb_rx;
 	uint16_t fb_tx;
 	uint16_t channel;
+	uint16_t spacing_khz;
+	uint16_t unit_backoff_us;
+	/* Time between the end of a received frame and the start of its ACK */
+	uint16_t aifs_us;
 	enum at86rf215_trx_state state;
 	uint8_t idx;
+	/* OQPSKC0.FCHIP */
+	uint8_t fchip;
 	uint8_t pc;
 	uint8_t amcs;
 	uint8_t tx_seq;
@@ -98,6 +117,7 @@ struct at86rf215_radio {
 	/* CSMA-CA number of backoffs (NB) and backoff exponent (BE) */
 	uint8_t nb;
 	uint8_t be;
+	int8_t cca_threshold;
 	/* Bitfields share a word: only access with chip->lock held */
 	bool started: 1;
 	bool promiscuous: 1;

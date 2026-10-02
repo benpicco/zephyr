@@ -31,6 +31,8 @@ description: |
 
             radio@1 {
                 reg = <1>;
+                phy = "mr-oqpsk";
+                sun-band = <2450>;
             };
         };
     };
@@ -83,3 +85,79 @@ child-binding:
       description: |
         Extended (EUI-64) address of the interface. If not set, a random
         address is used.
+
+    phy:
+      type: string
+      default: "oqpsk"
+      enum:
+        - "oqpsk"
+        - "mr-oqpsk"
+      description: |
+        PHY of the radio.
+          - oqpsk: legacy O-QPSK PHY (250 kb/s), channel page 0
+            (2.4 GHz, channels 11-26) or channel page 2 (915 MHz band,
+            channels 1-10).
+          - mr-oqpsk: SUN O-QPSK PHY (IEEE 802.15.4g), channel page 9.
+            Requires sun-band.
+
+    sun-band:
+      type: int
+      enum:
+        - 470
+        - 780
+        - 866
+        - 868
+        - 870
+        - 915
+        - 917
+        - 2450
+      description: |
+        Band designation (MHz) of the SUN O-QPSK PHY. The channel plan
+        follows IEEE 802.15.4-2024 table 11-14, channels are numbered
+        from 0:
+          - 470: 470.2 MHz + n * 200 kHz, 199 channels
+          - 780: 779.2 MHz + n * 200 kHz, 39 channels (100 kchip/s)
+                 780 MHz + n * 2 MHz, 4 channels (1000 kchip/s)
+          - 866: 865.1 MHz + n * 200 kHz, 15 channels
+          - 868: 868.3, 868.95 and 869.525 MHz (table 11-16)
+          - 870: 870.2 MHz + n * 200 kHz, 29 channels
+          - 915: 902.2 MHz + n * 200 kHz, 129 channels (100 kchip/s)
+                 904 MHz + n * 2 MHz, 12 channels (1000 kchip/s)
+          - 917: 917.1 MHz + n * 200 kHz, 32 channels (100 kchip/s)
+                 918.1 MHz + n * 2 MHz, 3 channels (1000 kchip/s)
+          - 2450: 2405 MHz + n * 5 MHz, 16 channels
+        The 2450 MHz band requires radio@1, all other bands radio@0.
+
+    chip-rate:
+      type: int
+      enum:
+        - 100
+        - 200
+        - 1000
+        - 2000
+      description: |
+        Chip rate (kchip/s) of the SUN O-QPSK PHY. The standard defines
+        100 and 1000 kchip/s for the 780, 915 and 917 MHz bands,
+        2000 kchip/s for the 2450 MHz band and 100 kchip/s for all other
+        bands. 200 kchip/s is proprietary.
+        The 2450 MHz band only supports 2000 kchip/s. In the sub-GHz bands
+        any chip rate can be used for compatibility with non-standard
+        devices, the channel plan of the band's lowest standard chip rate
+        then applies. Note that this may violate regional regulations.
+        Defaults to 2000 kchip/s in the 2450 MHz band and 100 kchip/s
+        otherwise.
+
+    rate-mode:
+      type: int
+      default: 0
+      enum:
+        - 0
+        - 1
+        - 2
+        - 3
+      description: |
+        Rate mode of transmitted frames of the SUN O-QPSK PHY. The data
+        rate is 6.25, 12.5, 25 or 50 kb/s at 100 kchip/s and 31.25, 125,
+        250 or 500 kb/s at 1000 and 2000 kchip/s. Frames of any rate
+        mode are received, ACK frames are sent with the rate mode of the
+        acknowledged frame.
