@@ -24,15 +24,16 @@ LOG_MODULE_REGISTER(eth_ksz8851snl, CONFIG_ETHERNET_LOG_LEVEL);
 
 #include "eth_ksz8851snl_priv.h"
 
-/*
- * The first 4 bytes read back after the FIFO read opcode are always
- * dummy/undefined data and must be discarded, followed by 4 more bytes
- * which duplicate the frame's status word and byte count (already read
- * through the RXFHSR/RXFHBCR registers), see datasheet section 3.5.6.
+/* The first 4 bytes read in an RXQ DMA session are dummy data, see datasheet
+ * section 3.5.6.
  */
-#define KSZ8851_FIFO_RX_HEADER_LEN	8
+#define KSZ8851_RX_DUMMY_LEN		4
+/* Each frame in the RXQ starts with its status word and byte count */
+#define KSZ8851_RX_HEADER_LEN		4
 /* Number of trailing CRC bytes included in the RX byte count */
 #define KSZ8851_RX_CRC_LEN		4
+/* Longest frame the chip receives, including the CRC */
+#define KSZ8851_RX_MAX_BYTE_COUNT	(2000 + KSZ8851_RX_CRC_LEN)
 /* Frame header (control word + byte count) written ahead of TX payload */
 #define KSZ8851_TX_HEADER_LEN		4
 
@@ -56,8 +57,8 @@ LOG_MODULE_REGISTER(eth_ksz8851snl, CONFIG_ETHERNET_LOG_LEVEL);
 #define KSZ8851_MAX_FRAGS		4
 #endif
 
-/* Opcode/header, payload fragments, trailing CRC/padding */
-#define KSZ8851_MAX_SPI_BUFS		(KSZ8851_MAX_FRAGS + 2)
+/* Opcode/header, payload fragments, trailing CRC/padding, next RX header */
+#define KSZ8851_MAX_SPI_BUFS		(KSZ8851_MAX_FRAGS + 3)
 
 static uint16_t ksz8851snl_cmd(uint8_t op, uint8_t be, uint8_t addr)
 {
@@ -266,15 +267,39 @@ unlock:
 	return ret;
 }
 
-/* Discard the frame at the head of the RX queue without reading it */
-static int ksz8851snl_rx_release(const struct device *dev)
+/* Drop all frames in the RXQ, e.g. after its read pointer got out of sync */
+static int ksz8851snl_rx_flush(const struct device *dev)
 {
-	return ksz8851snl_reg_write(dev, KSZ8851_REG_RXQCR, KSZ8851_RXQCR | RXQCR_RRXEF);
+	int ret;
+
+	ret = ksz8851snl_reg_write(dev, KSZ8851_REG_RXCR1, KSZ8851_RXCR1);
+	if (ret == 0) {
+		ret = ksz8851snl_reg_write(dev, KSZ8851_REG_RXCR1, KSZ8851_RXCR1 | RXCR1_FRXQ);
+	}
+	if (ret == 0) {
+		ret = ksz8851snl_reg_write(dev, KSZ8851_REG_RXCR1, KSZ8851_RXCR1 | RXCR1_RXE);
+	}
+
+	return ret;
 }
 
-static int ksz8851snl_rx_frame(const struct device *dev, uint16_t status, uint16_t byte_count)
+/* Read the frame with the header @p hdr from the RXQ.
+ *
+ * All frames of an RXQ DMA session are read in a single FIFO read, with CS
+ * held asserted in between: the chip prefetches one double word, which is
+ * lost when CS is deasserted. The first frame starts the FIFO read with the
+ * opcode, followed by the dummy bytes and the frame header, which was read
+ * through RXFHSR/RXFHBCR. With RXQCR_ADRFE set, the header of each following
+ * frame comes right after the current frame, so it is read into @p next in
+ * the same transfer, unless that is NULL.
+ */
+static int ksz8851snl_rx_frame(const struct device *dev, const uint8_t *hdr, uint8_t *next,
+			       bool first)
 {
+	const struct ksz8851snl_config *cfg = dev->config;
 	struct ksz8851snl_runtime *ctx = dev->data;
+	uint16_t status = sys_get_le16(&hdr[0]);
+	uint16_t byte_count = sys_get_le16(&hdr[2]) & RXFHBCR_RXBC_MASK;
 	uint8_t cmd = KSZ8851_CMD_FIFO_READ;
 	const struct spi_buf tx_buf = {
 		.buf = &cmd,
@@ -289,50 +314,57 @@ static int ksz8851snl_rx_frame(const struct device *dev, uint16_t status, uint16
 		.buffers = bufs,
 		.count = 0,
 	};
-	struct net_pkt *pkt;
-	size_t len;
-	size_t remaining;
+	struct net_pkt *pkt = NULL;
+	size_t len = 0;
 	int ret;
 
-	if (!(status & RXFHSR_RXFV) || (status & RXFHSR_RX_ERRORS) ||
-	    byte_count <= KSZ8851_RX_CRC_LEN ||
+	if (!(status & RXFHSR_RXFV) || byte_count <= KSZ8851_RX_CRC_LEN ||
+	    byte_count > KSZ8851_RX_MAX_BYTE_COUNT) {
+		LOG_ERR("%s: invalid RX frame header (status 0x%04x, length %u)",
+			dev->name, status, byte_count);
+		return -EIO;
+	}
+
+	if ((status & RXFHSR_RX_ERRORS) ||
 	    byte_count > NET_ETH_MAX_FRAME_SIZE + KSZ8851_RX_CRC_LEN) {
 		LOG_WRN("%s: dropping bad RX frame (status 0x%04x, length %u)",
 			dev->name, status, byte_count);
 		eth_stats_update_errors_rx(ctx->iface);
-		return ksz8851snl_rx_release(dev);
+	} else {
+		pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, byte_count - KSZ8851_RX_CRC_LEN,
+						   NET_AF_UNSPEC, 0,
+						   K_MSEC(CONFIG_ETH_KSZ8851SNL_TIMEOUT));
+		if (pkt == NULL) {
+			LOG_WRN("%s: no packet buffer for RX frame (%u bytes)", dev->name,
+				byte_count - KSZ8851_RX_CRC_LEN);
+			eth_stats_update_errors_rx(ctx->iface);
+		}
 	}
 
-	len = byte_count - KSZ8851_RX_CRC_LEN;
-
-	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, len, NET_AF_UNSPEC, 0,
-					   K_MSEC(CONFIG_ETH_KSZ8851SNL_TIMEOUT));
-	if (pkt == NULL) {
-		LOG_WRN("%s: no packet buffer for RX frame (%zu bytes)", dev->name, len);
-		eth_stats_update_errors_rx(ctx->iface);
-		return ksz8851snl_rx_release(dev);
+	if (first) {
+		bufs[rx.count] = (struct spi_buf){
+			.buf = NULL,
+			.len = sizeof(cmd) + KSZ8851_RX_DUMMY_LEN + KSZ8851_RX_HEADER_LEN,
+		};
+		rx.count++;
 	}
 
-	bufs[rx.count] = (struct spi_buf){
-		.buf = NULL,
-		.len = sizeof(cmd) + KSZ8851_FIFO_RX_HEADER_LEN,
-	};
-	rx.count++;
-
-	remaining = len;
-	for (struct net_buf *frag = pkt->buffer; frag != NULL && remaining > 0U;
-	     frag = frag->frags) {
-		size_t chunk = MIN(net_buf_tailroom(frag), remaining);
+	for (struct net_buf *frag = pkt != NULL ? pkt->buffer : NULL;
+	     frag != NULL && len < byte_count - KSZ8851_RX_CRC_LEN; frag = frag->frags) {
+		size_t chunk = MIN(net_buf_tailroom(frag), byte_count - KSZ8851_RX_CRC_LEN - len);
 
 		if (chunk == 0U) {
 			continue;
 		}
 
-		if (rx.count == ARRAY_SIZE(bufs) - 1U) {
+		if (rx.count == ARRAY_SIZE(bufs) - 2U) {
 			LOG_ERR("%s: too many RX fragments", dev->name);
-			net_pkt_unref(pkt);
 			eth_stats_update_errors_rx(ctx->iface);
-			return ksz8851snl_rx_release(dev);
+			net_pkt_unref(pkt);
+			pkt = NULL;
+			rx.count = first ? 1U : 0U;
+			len = 0;
+			break;
 		}
 
 		bufs[rx.count] = (struct spi_buf){
@@ -340,7 +372,7 @@ static int ksz8851snl_rx_frame(const struct device *dev, uint16_t status, uint16
 			.len = chunk,
 		};
 		rx.count++;
-		remaining -= chunk;
+		len += chunk;
 	}
 
 	/* The whole frame (incl. CRC) must be drained, in multiples of 4 bytes */
@@ -350,19 +382,25 @@ static int ksz8851snl_rx_frame(const struct device *dev, uint16_t status, uint16
 	};
 	rx.count++;
 
-	ret = ksz8851snl_reg_write(dev, KSZ8851_REG_RXFDPR, RXFDPR_RXFPAI);
-	if (ret == 0) {
-		ret = ksz8851snl_fifo_xfer(dev, &tx, &rx);
+	if (next != NULL) {
+		bufs[rx.count] = (struct spi_buf){
+			.buf = next,
+			.len = KSZ8851_RX_HEADER_LEN,
+		};
+		rx.count++;
 	}
 
+	ret = spi_transceive_dt(&cfg->spi_rxq, first ? &tx : NULL, &rx);
 	if (ret < 0) {
 		LOG_ERR("%s: RX FIFO read failed (%d)", dev->name, ret);
-		net_pkt_unref(pkt);
+		if (pkt != NULL) {
+			net_pkt_unref(pkt);
+		}
 		eth_stats_update_errors_rx(ctx->iface);
 		return ret;
 	}
 
-	if (net_recv_data(ctx->iface, pkt) < 0) {
+	if (pkt != NULL && net_recv_data(ctx->iface, pkt) < 0) {
 		net_pkt_unref(pkt);
 	}
 
@@ -371,9 +409,12 @@ static int ksz8851snl_rx_frame(const struct device *dev, uint16_t status, uint16
 
 static int ksz8851snl_rx(const struct device *dev)
 {
+	const struct ksz8851snl_config *cfg = dev->config;
+	uint8_t hdr[2][KSZ8851_RX_HEADER_LEN];
 	uint16_t rxfctr;
 	uint8_t frame_count;
 	int ret;
+	int end_ret;
 
 	ret = ksz8851snl_reg_read(dev, KSZ8851_REG_RXFCTR, &rxfctr);
 	if (ret < 0) {
@@ -381,24 +422,57 @@ static int ksz8851snl_rx(const struct device *dev)
 	}
 
 	frame_count = (uint8_t)(rxfctr >> 8);
+	if (frame_count == 0U) {
+		return 0;
+	}
 
-	while (frame_count-- > 0U) {
-		uint8_t hdr[4];
+	/* The DMA session starts at the frame whose header was read from
+	 * RXFHSR/RXFHBCR. All frames are then read in that session, see
+	 * datasheet figure 3-11.
+	 */
+	ret = ksz8851snl_read(dev, KSZ8851_REG_RXFHSR, KSZ8851_BE_DWORD, hdr[0], sizeof(hdr[0]));
+	if (ret < 0) {
+		return ret;
+	}
 
-		/* RXFHSR and RXFHBCR in one 32 bit access */
-		ret = ksz8851snl_read(dev, KSZ8851_REG_RXFHSR, KSZ8851_BE_DWORD, hdr, sizeof(hdr));
-		if (ret < 0) {
-			break;
-		}
+	ret = ksz8851snl_reg_write(dev, KSZ8851_REG_RXFDPR, RXFDPR_RXFPAI);
+	if (ret < 0) {
+		return ret;
+	}
 
-		ret = ksz8851snl_rx_frame(dev, sys_get_le16(&hdr[0]),
-					  sys_get_le16(&hdr[2]) & RXFHBCR_RXBC_MASK);
-		if (ret < 0) {
-			break;
+	ret = ksz8851snl_reg_write(dev, KSZ8851_REG_RXQCR, KSZ8851_RXQCR | RXQCR_SDA);
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* Don't let the stack preempt us on each received frame, it can process
+	 * a frame while the next one is read over SPI.
+	 */
+	k_sched_lock();
+
+	for (uint8_t i = 0; ret == 0 && i < frame_count; i++) {
+		ret = ksz8851snl_rx_frame(dev, hdr[i % 2U],
+					  i + 1U < frame_count ? hdr[(i + 1U) % 2U] : NULL, i == 0U);
+	}
+
+	k_sched_unlock();
+
+	spi_release_dt(&cfg->spi_rxq);
+
+	end_ret = ksz8851snl_reg_write(dev, KSZ8851_REG_RXQCR, KSZ8851_RXQCR);
+	if (end_ret < 0) {
+		LOG_ERR("%s: ending RXQ access failed (%d)", dev->name, end_ret);
+	}
+
+	if (ret < 0) {
+		/* The RXQ read pointer is lost after a partial read */
+		end_ret = ksz8851snl_rx_flush(dev);
+		if (end_ret < 0) {
+			LOG_ERR("%s: flushing RXQ failed (%d)", dev->name, end_ret);
 		}
 	}
 
-	return ret;
+	return ret < 0 ? ret : end_ret;
 }
 
 static void ksz8851snl_update_link_status(const struct device *dev)
@@ -808,6 +882,8 @@ static int ksz8851snl_init(const struct device *dev)
 	};									\
 	static const struct ksz8851snl_config ksz8851snl_config_##inst = {	\
 		.spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8)),		\
+		.spi_rxq = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8) |		\
+						SPI_HOLD_ON_CS | SPI_LOCK_ON),	\
 		.interrupt = GPIO_DT_SPEC_INST_GET(inst, int_gpios),		\
 		.reset = GPIO_DT_SPEC_INST_GET_OR(inst, reset_gpios, {0}),	\
 		.mac_cfg = NET_ETH_MAC_DT_INST_CONFIG_INIT(inst),		\

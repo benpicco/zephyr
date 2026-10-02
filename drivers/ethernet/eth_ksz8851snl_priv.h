@@ -184,6 +184,8 @@
 
 struct ksz8851snl_config {
 	struct spi_dt_spec spi;
+	/* Keeps CS asserted to read several frames in one RXQ FIFO read */
+	struct spi_dt_spec spi_rxq;
 	struct gpio_dt_spec interrupt;
 	struct gpio_dt_spec reset;
 	struct net_eth_mac_config mac_cfg;
