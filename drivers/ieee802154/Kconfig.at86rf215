@@ -1,0 +1,55 @@
+# Microchip (Atmel) AT86RF215 configuration options
+
+# Copyright (c) 2026 ML!PA Consulting GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig IEEE802154_AT86RF215
+	bool "Microchip AT86RF215 driver support"
+	default y
+	depends on DT_HAS_ATMEL_AT86RF215_ENABLED
+	select SPI
+	select GPIO
+
+if IEEE802154_AT86RF215
+
+config IEEE802154_AT86RF215_RX_STACK_SIZE
+	int "Driver's internal IRQ thread stack size"
+	default 1024
+	help
+	  This option sets the stack size of the driver's internal thread that
+	  services the transceiver interrupts of both radios.
+
+config IEEE802154_AT86RF215_RX_THREAD_PRIO
+	int "Driver's internal IRQ thread priority"
+	default 2
+	help
+	  Cooperative priority of the driver's internal thread that services
+	  the transceiver interrupts.
+
+config IEEE802154_AT86RF215_TX_RETRIES
+	int "Number of frame retransmissions"
+	default 3
+	range 0 7
+	help
+	  Number of times a frame is retransmitted if no ACK frame was
+	  received (macMaxFrameRetries).
+
+config IEEE802154_AT86RF215_CCA_THRESHOLD
+	int "CCA energy detection threshold [dBm]"
+	default -75
+	range -127 4
+	help
+	  The channel is considered busy if the energy measured during clear
+	  channel assessment exceeds this threshold. IEEE 802.15.4 requires
+	  the threshold to be at most 10 dB above the receiver sensitivity
+	  of the PHY (-85 dBm for O-QPSK), which is also the reset value of
+	  the transceiver.
+
+config IEEE802154_AT86RF215_INIT_PRIO
+	int "AT86RF215 initialization priority"
+	default 80
+	help
+	  Set the initialization priority number. The driver requires SPI and
+	  GPIO to be ready first and has to start before the net stack.
+
+endif
