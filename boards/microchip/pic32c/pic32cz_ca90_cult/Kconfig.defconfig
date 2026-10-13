@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+if BOARD_PIC32CZ_CA90_CULT
+
+# The clock driver does not support re-initialising an already configured clock tree: the
+# application hangs at boot if MCUboot has set up the clocks. Leave the clocks in their reset
+# state in MCUboot so that the application can configure them.
+config CLOCK_CONTROL_MCHP_CONFIG_BOOTUP
+	default n if MCUBOOT
+
+endif # BOARD_PIC32CZ_CA90_CULT
