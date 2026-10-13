@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+if BOARD_PIC32CZ_CA90_CULT
+
+# The mplab_ipe runner mass-erases the chip on every run, so all images must be flashed at once
+# from the merged hex file.
+config MERGED_HEX_FILES
+	default y
+
+endif # BOARD_PIC32CZ_CA90_CULT
