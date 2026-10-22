@@ -114,7 +114,7 @@ static int cmd_net_mem(const struct shell *sh, size_t argc, char *argv[])
 	PR("Network buffer pools:\n");
 
 #if defined(CONFIG_NET_BUF_POOL_USAGE)
-	PR("Address\t\tTotal\tAvail\tMaxUsed\tName\n");
+	PR("Address\tTotal\tAvail\tMaxUsed\tName\n");
 #if defined(CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION)
 	PR("%p\t%d\t%u\t%u\tRX\n", rx, rx->info.num_blocks,
 	   k_mem_slab_num_free_get(rx), rx->info.max_used);
