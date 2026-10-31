@@ -152,7 +152,6 @@ struct mrf24j40_data {
 	struct k_sem tx_sem;
 	K_KERNEL_STACK_MEMBER(rx_stack, CONFIG_IEEE802154_MRF24J40_RX_STACK_SIZE);
 	struct k_thread rx_thread;
-	uint8_t mac[8];
 	int tx_result;
 	bool tx_pending;
 	bool tx_ack_requested;
@@ -708,10 +707,21 @@ static int mrf24j40_attr_get(const struct device *dev, enum ieee802154_attr attr
 static void mrf24j40_iface_init(struct net_if *iface)
 {
 	const struct device *dev = net_if_get_device(iface);
+	const struct mrf24j40_config *cfg = dev->config;
 	struct mrf24j40_data *data = dev->data;
+	uint8_t mac[8];
 
 	data->iface = iface;
-	net_if_set_link_addr(iface, data->mac, sizeof(data->mac), NET_LINK_IEEE802154);
+	if (cfg->has_mac) {
+		memcpy(mac, cfg->mac, sizeof(mac));
+	} else {
+		sys_rand_get(mac, sizeof(mac));
+		/* Locally administered, unicast */
+		mac[0] = (mac[0] & ~BIT(0)) | BIT(1);
+	}
+
+	/* ieee802154_init() copies this address into its own context. */
+	net_if_set_link_addr(iface, mac, sizeof(mac), NET_LINK_IEEE802154);
 	ieee802154_init(iface);
 }
 
@@ -822,14 +832,6 @@ static int mrf24j40_init(const struct device *dev)
 	if (ret != 0) {
 		LOG_ERR("Radio initialization failed (%d)", ret);
 		return ret;
-	}
-
-	if (cfg->has_mac) {
-		memcpy(data->mac, cfg->mac, sizeof(data->mac));
-	} else {
-		sys_rand_get(data->mac, sizeof(data->mac));
-		/* Locally administered, unicast */
-		data->mac[0] = (data->mac[0] & ~BIT(0)) | BIT(1);
 	}
 
 	k_thread_create(&data->rx_thread, data->rx_stack,
