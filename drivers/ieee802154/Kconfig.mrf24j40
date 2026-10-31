@@ -1,0 +1,25 @@
+# Microchip MRF24J40 configuration options
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig IEEE802154_MRF24J40
+	bool "Microchip MRF24J40 Driver support"
+	default y
+	depends on DT_HAS_MICROCHIP_MRF24J40_ENABLED
+	select SPI
+	select GPIO
+
+if IEEE802154_MRF24J40
+
+config IEEE802154_MRF24J40_RX_STACK_SIZE
+	int "Driver's internal RX thread stack size"
+	default 1024
+	help
+	  Sets the stack size for the driver's interrupt-processing thread.
+
+config IEEE802154_MRF24J40_INIT_PRIO
+	int "MRF24J40 initialization priority"
+	default 80
+	help
+	  The driver must initialize after its SPI and GPIO devices.
+
+endif

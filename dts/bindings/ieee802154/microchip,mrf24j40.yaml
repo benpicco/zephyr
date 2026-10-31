@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip MRF24J40 2.4 GHz IEEE 802.15.4 transceiver
+
+compatible: "microchip,mrf24j40"
+
+include: spi-device.yaml
+
+properties:
+  irq-gpios:
+    type: phandle-array
+    required: true
+    description: Interrupt output from the radio
+
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: Active-low hardware reset input
+
+  local-mac-address:
+    type: uint8-array
+    min-len: 8
+    max-len: 8
+    description: IEEE 802.15.4 extended address
