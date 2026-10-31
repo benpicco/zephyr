@@ -10,12 +10,16 @@ properties:
   irq-gpios:
     type: phandle-array
     required: true
-    description: Interrupt output from the radio
+    description: |
+      Interrupt output (INT) from the radio. The driver configures the
+      radio for a rising-edge interrupt, so this must be GPIO_ACTIVE_HIGH.
 
   reset-gpios:
     type: phandle-array
     required: true
-    description: Active-low hardware reset input
+    description: |
+      Hardware reset input (RESET). The pin is active-low, so this should
+      be GPIO_ACTIVE_LOW.
 
   local-mac-address:
     type: uint8-array
